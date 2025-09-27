@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
 
-dataset_path = "/Users/ishaan/Documents/Projects/ConeClassifier/dataset"
+dataset_path = "./dataset"
 
 # 1. Load the dataset (boundaries and cone maps)
 def load_yaml_data(path):
