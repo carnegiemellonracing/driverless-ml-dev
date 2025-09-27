@@ -10,8 +10,8 @@ class ConeClassifier(nn.Module):
     def __init__(self):
         super(ConeClassifier, self).__init__()
         # Fully connected layers with reduced complexity
-        self.fc1 = nn.Linear(8, 100, bias=False)
-        self.fc2 = nn.Linear(100, 1, bias=False)
+        self.fc1 = nn.Linear(8, 100)#, bias=False
+        self.fc2 = nn.Linear(100, 1)
         
     def forward(self, x):
         # Fully connected layers
