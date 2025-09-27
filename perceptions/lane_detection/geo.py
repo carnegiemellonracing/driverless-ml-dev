@@ -177,10 +177,155 @@ def constraint_decider(path_pair):
     
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair)
 
+def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
+    """
+    Backtracking (BT) decider implementing the paper's sophisticated backtracking logic.
+    
+    The BT decider analyzes constraint violations and determines whether to:
+    1. Stop backtracking (prune the path)
+    2. Continue searching (allow path extension)
+    3. Apply specific backtracking strategies based on constraint type
+    
+    Args:
+        path_pair: Tuple of (left_path, right_path) indices
+        fixed_matches: Set of (left_idx, right_idx) tuples that are fixed matches
+        wmin, wmax: Width constraints for lane boundaries
+    
+    Returns:
+        dict with keys:
+        - 'continue': bool - whether to continue searching this path
+        - 'reason': str - reason for the decision
+        - 'violations': list - list of constraint violations found
+    """
+    if fixed_matches is None:
+        fixed_matches = set()
+    
+    left_path, right_path = path_pair
+    violations = []
+    
+    # Check segment angle constraint (C_seg)
+    seg_violations = []
+    for i in range(len(left_path) - 2):
+        p1 = np.array(points[left_path[i]])
+        p2 = np.array(points[left_path[i+1]])
+        p3 = np.array(points[left_path[i+2]])
+        angle = np.abs(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]) - 
+                      np.arctan2(p3[1] - p2[1], p3[0] - p2[0]))
+        if angle > np.pi / 2:
+            seg_violations.append(('left', i, angle))
+    
+    for i in range(len(right_path) - 2):
+        p1 = np.array(points[right_path[i]])
+        p2 = np.array(points[right_path[i+1]])
+        p3 = np.array(points[right_path[i+2]])
+        angle = np.abs(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]) - 
+                      np.arctan2(p3[1] - p2[1], p3[0] - p2[0]))
+        if angle > np.pi / 2:
+            seg_violations.append(('right', i, angle))
+    
+    if seg_violations:
+        violations.append(('seg_angle', seg_violations))
+    
+    # Check width constraint (C_width) with detailed analysis
+    width_violations = []
+    if len(left_path) >= 2 and len(right_path) >= 2:
+        matching_lines = find_matching_points(left_path, right_path, points, fixed_matches)
+        
+        for match in matching_lines:
+            width = match['width']
+            is_fixed = match['is_fixed']
+            
+            if width < wmin:
+                width_violations.append(('too_narrow', match, width))
+            elif width > wmax:
+                width_violations.append(('too_wide', match, width))
+    
+    if width_violations:
+        violations.append(('width', width_violations))
+    
+    # Check polygon constraint (C_poly)
+    poly_violations = []
+    if len(left_path) >= 2 and len(right_path) >= 2:
+        # Create polygon and check for self-intersections
+        polygon_points = []
+        for i in left_path:
+            polygon_points.append(np.array(points[i]))
+        for i in reversed(right_path):
+            polygon_points.append(np.array(points[i]))
+        
+        n = len(polygon_points)
+        for i in range(n):
+            for j in range(i + 2, n):
+                if j == (i + 1) % n or i == (j + 1) % n:
+                    continue
+                if line_segments_intersect(polygon_points[i], polygon_points[(i+1)%n],
+                                         polygon_points[j], polygon_points[(j+1)%n]):
+                    poly_violations.append((i, j))
+    
+    if poly_violations:
+        violations.append(('polygon', poly_violations))
+    
+    # Apply backtracking logic based on violations
+    if not violations:
+        return {'continue': True, 'reason': 'no_violations', 'violations': []}
+    
+    # Strategy 1: Segment angle violations - always stop (path is geometrically invalid)
+    if any(v[0] == 'seg_angle' for v in violations):
+        return {'continue': False, 'reason': 'sharp_turn_violation', 'violations': violations}
+    
+    # Strategy 2: Polygon violations - always stop (self-intersecting lane)
+    if any(v[0] == 'polygon' for v in violations):
+        return {'continue': False, 'reason': 'polygon_intersection', 'violations': violations}
+    
+    # Strategy 3: Width violations - apply paper's backtracking criteria
+    width_violation = next((v for v in violations if v[0] == 'width'), None)
+    if width_violation:
+        _, width_violations_list = width_violation
+        
+        # Check each width violation
+        for violation_type, match, width in width_violations_list:
+            if violation_type == 'too_narrow':
+                # Narrow lanes cannot be fixed by extending boundaries
+                return {'continue': False, 'reason': 'width_too_narrow', 'violations': violations}
+            
+            elif violation_type == 'too_wide':
+                if match['is_fixed']:
+                    # Fixed matching line that's too wide cannot be fixed
+                    return {'continue': False, 'reason': 'fixed_width_too_wide', 'violations': violations}
+                else:
+                    # Mutable matching line that's too wide may be fixed by extending boundaries
+                    # Continue searching to allow boundary extension
+                    pass
+    
+    # If we reach here, continue searching (e.g., mutable width violations that might be fixable)
+    return {'continue': True, 'reason': 'fixable_violations', 'violations': violations}
+
+def debug_bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
+    """
+    Debug version of BT decider that provides detailed information about constraint analysis.
+    Useful for understanding how the backtracking logic works.
+    """
+    result = bt_decider(path_pair, fixed_matches, wmin, wmax)
+    
+    print(f"BT Decider Analysis for path pair:")
+    print(f"  Left path: {path_pair[0]}")
+    print(f"  Right path: {path_pair[1]}")
+    print(f"  Decision: {'CONTINUE' if result['continue'] else 'STOP'}")
+    print(f"  Reason: {result['reason']}")
+    
+    if result['violations']:
+        print(f"  Violations found:")
+        for violation_type, violation_data in result['violations']:
+            print(f"    - {violation_type}: {violation_data}")
+    else:
+        print(f"  No violations found")
+    
+    return result
+
 def enumerate_path_pairs(graph, sl, sr, itmax=100):
     """
     Enumerate path pairs with improved backtracking based on constraint violations.
-    Implements the paper's backtracking criteria for efficient pruning.
+    Implements the paper's backtracking criteria for efficient pruning using the BT decider.
     """
     def dfs(path_pair, visited, i, fixed_matches=None):
         if i >= itmax:
@@ -202,9 +347,13 @@ def enumerate_path_pairs(graph, sl, sr, itmax=100):
             for rn in right_adj:
                 new_pair = (current_left + [ln], current_right + [rn])
                 
-                # Check constraints with backtracking logic
-                if constraint_decider(new_pair):
+                # Use BT decider for sophisticated backtracking logic
+                bt_result = bt_decider(new_pair, fixed_matches)
+                
+                if bt_result['continue']:
+                    # Add valid path pair to solutions
                     solutions.append(new_pair)
+                    
                     # Update fixed matches for the new path
                     new_fixed_matches = fixed_matches.copy()
                     # Add new matches as fixed for future extensions
@@ -212,11 +361,12 @@ def enumerate_path_pairs(graph, sl, sr, itmax=100):
                         if j < len(new_pair[1]):
                             new_fixed_matches.add((j, j))
                     
+                    # Recursively search from this valid path
                     solutions.extend(dfs(new_pair, visited, i + 1, new_fixed_matches))
                 else:
-                    # Apply backtracking based on constraint type
-                    # This is where the paper's backtracking criteria would be applied
-                    # For now, we simply don't extend this path further
+                    # BT decider determined this path should be pruned
+                    # The decision is based on sophisticated analysis of constraint violations
+                    # No further exploration from this path
                     pass
         
         return solutions
