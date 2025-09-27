@@ -481,8 +481,8 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     plt.show()
 
 # Example usage:
-# points = [(0, 0), (0, 3), (0, 6), (0, 9), (0, 12), (4, 0), (4, 3), (4, 6), (4, 9), (4, 12)]  # Example set of 2D points
-points = [(0, 0), (0, 3), (4, 0), (4, 3)]  # Example set of 2D points
+points = [(0, 0), (0, 3), (0, 6), (0, 9), (0, 12), (4, 0), (4, 3), (4, 6), (4, 9), (4, 12)]  # Example set of 2D points
+# points = [(0, 0), (0, 3), (4, 0), (4, 3)]  # Example set of 2D points
 dmax = 5
 adj_list = construct_adjacency_list(points, 4)
 print("Original points:", points)
