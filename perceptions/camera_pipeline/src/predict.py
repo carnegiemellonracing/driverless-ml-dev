@@ -45,7 +45,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from ultralytics.utils.plotting import Annotator
 
-from models.common import DetectMultiBackend
+from utils.common import DetectMultiBackend
 from utils.augmentations import classify_transforms
 from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
