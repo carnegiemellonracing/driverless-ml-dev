@@ -7,6 +7,8 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
+import math
+import sys
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
@@ -59,24 +61,39 @@ def generate_perceptual_field_data(boundaries, cone_maps, perceptual_range=30, n
         right_boundary = boundary['right']
         
         # Filter out points outside perceptual range
-        filtered_left = filter_points_within_range(left_boundary, cone_map, perceptual_range)
-        filtered_right = filter_points_within_range(right_boundary, cone_map, perceptual_range)
-        
-        # Add noise for false positives
-        noisy_left = add_noise(filtered_left, noise_rate)
-        noisy_right = add_noise(filtered_right, noise_rate)
-        
-        perceptual_field_data.append((noisy_left, noisy_right))
+        for left_point in left_boundary:
+            filtered_points, filtered_boundary = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range)
+            noisy_points = add_noise(filtered_points, noise_rate)
+            perceptual_field_data.append((noisy_points, filtered_boundary))
     
     return perceptual_field_data
 
-def filter_points_within_range(boundary, cone_map, perceptual_range):
-    filtered = []
-    for point in boundary:
+def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range):
+    all_filtered = []
+    boundary_filtered = []
+    left_x, left_y = cone_map.get(left_point)
+    closest_right_x , closest_right_y = None
+    min_dist_squared = sys.maxsize 
+    
+    for right_point in right_boundary:
+        right_x, right_y = cone_map.get(right_point)
+        new_dist_squared = (right_x - left_x)**2 + (right_y - left_y)**2
+        if new_dist_squared < min_dist_squared:
+            closest_right_x = right_x
+            closest_right_y = right_y
+            min_dist_squared = new_dist_squared
+             
+    mid_x = (left_x + closest_right_x)/2
+    mid_y = (left_y + closest_right_y)/2
+    
+    for _, point in cone_map.items():
         x, y = cone_map.get(point)
-        if x**2 + y**2 <= perceptual_range**2:  # Check if the point is within the perceptual range
-            filtered.append([x, y])
-    return filtered
+        if (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2:  # Check if the point is within the perceptual range
+            if (point in left_boundary) or (point in right_boundary):
+                boundary_filtered.append([x, y])    
+            all_filtered.append([x, y])
+            
+    return (all_filtered, boundary_filtered)
 
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
     noisy_points = []
