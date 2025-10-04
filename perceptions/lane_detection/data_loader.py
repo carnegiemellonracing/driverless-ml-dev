@@ -45,7 +45,7 @@ def generate_perceptual_field_data(
         left_boundary = boundary["left"]
         right_boundary = boundary["right"]
 
-        # Filter out points outside perceptual range
+        # Filter out points outside perceptual range. Generate a perceptual field using every left point
         for left_point in left_boundary:
             filtered_points, filtered_boundary = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range)
             noisy_points = add_noise(filtered_points, noise_rate)
@@ -55,8 +55,9 @@ def generate_perceptual_field_data(
 
 def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range):
     """
-    Take all points within a certain range defined on the midpoint of two left and right boundary points. Also store all filtered boundary points
-    Returns a tuple
+    Returns:
+    - List of all points within a certain range defined on the midpoint of two left and right boundary points
+    - List of only boundary points that are filtered
     """
     all_filtered = []
     boundary_filtered = []
