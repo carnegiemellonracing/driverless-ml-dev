@@ -23,26 +23,6 @@ def pad_sequence(sequence, max_len):
     padded_sequence = F.pad(sequence, (0, 0, 0, max_len - sequence.size(0)), value=0)
     return padded_sequence
 
-def collate_fn(batch):
-    """
-    Custom collate function to pad sequences in the batch to the same length.
-    """
-    left_tensors = [item[0] for item in batch]
-    right_tensors = [item[1] for item in batch]
-    
-    # Find the maximum length of the sequences
-    max_left_len = max([t.size(0) for t in left_tensors])
-    max_right_len = max([t.size(0) for t in right_tensors])
-    
-    # Pad all sequences to the same length
-    left_tensors = [pad_sequence(t, max_left_len) for t in left_tensors]
-    right_tensors = [pad_sequence(t, max_right_len) for t in right_tensors]
-    
-    # Stack the tensors into a single batch
-    left_tensor_batch = torch.stack(left_tensors, dim=0)
-    right_tensor_batch = torch.stack(right_tensors, dim=0)
-    
-    return left_tensor_batch, right_tensor_batch
 
 # Load all boundaries and cone maps
 boundary_paths = [f"{dataset_path}/boundaries_{i}.yaml" for i in range(1, 10)]

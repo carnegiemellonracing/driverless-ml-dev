@@ -231,8 +231,8 @@ def main(mode='train', model_path='model.pth'):
     train_dataset = LaneDetectionDataset([(full_dataset.data[i]) for i in train_indices], augment=True)
     val_dataset = LaneDetectionDataset([(full_dataset.data[i]) for i in val_indices], augment=False)  # No augmentation on validation
 
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False, collate_fn=collate_fn)
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
     
     if mode == 'eval':
         # Only evaluate existing model
