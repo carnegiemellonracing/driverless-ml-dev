@@ -2,6 +2,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from angle_utils import calculate_segment_angle
 
+
+def compute_iou(pred, gt):
+    """Compute IoU between predicted and ground truth points"""
+    # Convert to sets of points for IoU calculation
+    pred_set = set(map(tuple, pred.reshape(-1, 2)))
+    gt_set = set(map(tuple, gt.reshape(-1, 2)))
+    
+    # Calculate intersection and union
+    intersection = len(pred_set.intersection(gt_set))
+    union = len(pred_set.union(gt_set))
+    
+    return intersection / max(union, 1)  # Avoid division by zero
+
 def construct_adjacency_list(points, dmax):
     adjacency_list = {i: [] for i in range(len(points))}
     

@@ -20,15 +20,3 @@ class ConeClassifier(nn.Module):
         x = self.fc2(x)
         
         return x
-
-def compute_iou(pred, gt):
-    """Compute IoU between predicted and ground truth points"""
-    # Convert to sets of points for IoU calculation
-    pred_set = set(map(tuple, pred.reshape(-1, 2)))
-    gt_set = set(map(tuple, gt.reshape(-1, 2)))
-    
-    # Calculate intersection and union
-    intersection = len(pred_set.intersection(gt_set))
-    union = len(pred_set.union(gt_set))
-    
-    return intersection / max(union, 1)  # Avoid division by zero
