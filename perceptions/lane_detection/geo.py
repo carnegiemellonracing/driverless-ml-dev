@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from angle_utils import calculate_segment_angle
 
 def construct_adjacency_list(points, dmax):
     adjacency_list = {i: [] for i in range(len(points))}
@@ -61,7 +62,7 @@ def line_segments_intersect(p1, p2, p3, p4):
     
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
-def constraint_decider(path_pair):
+def constraint_decider(path_pair, debug=False):
     """
     Constraint decider implementing the paper's geometric constraints.
     Includes segment angle, width, and polygon constraints with proper backtracking.
@@ -76,30 +77,22 @@ def constraint_decider(path_pair):
         
         # Check left path
         for i in range(len(left_path) - 2):
-            p1 = np.array(points[left_path[i]])
-            p2 = np.array(points[left_path[i+1]])
-            p3 = np.array(points[left_path[i+2]])
+            p1 = points[left_path[i]]
+            p2 = points[left_path[i+1]]
+            p3 = points[left_path[i+2]]
 
-            angle = np.abs(np.arctan2(
-                p2[1] - p1[1], p2[0] - p1[0]
-            ) - np.arctan2(
-                p3[1] - p2[1], p3[0] - p2[0]
-            ))
+            angle = calculate_segment_angle(p1, p2, p3)
 
             if angle > np.pi / 2:  # 90 degrees
                 return False
                 
         # Check right path
         for i in range(len(right_path) - 2):
-            p1 = np.array(points[right_path[i]])
-            p2 = np.array(points[right_path[i+1]])
-            p3 = np.array(points[right_path[i+2]])
+            p1 = points[right_path[i]]
+            p2 = points[right_path[i+1]]
+            p3 = points[right_path[i+2]]
 
-            angle = np.abs(np.arctan2(
-                p2[1] - p1[1], p2[0] - p1[0]
-            ) - np.arctan2(
-                p3[1] - p2[1], p3[0] - p2[0]
-            ))
+            angle = calculate_segment_angle(p1, p2, p3)
 
             if angle > np.pi / 2:  # 90 degrees
                 return False
@@ -175,6 +168,10 @@ def constraint_decider(path_pair):
         
         return True
     
+    if debug:
+        print(f"Cseg: {Cseg(path_pair)}")
+        print(f"Cwidth: {Cwidth(path_pair)}")
+        print(f"Cpoly: {Cpoly(path_pair)}")
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair)
 
 def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
@@ -206,20 +203,18 @@ def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
     # Check segment angle constraint (C_seg)
     seg_violations = []
     for i in range(len(left_path) - 2):
-        p1 = np.array(points[left_path[i]])
-        p2 = np.array(points[left_path[i+1]])
-        p3 = np.array(points[left_path[i+2]])
-        angle = np.abs(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]) - 
-                      np.arctan2(p3[1] - p2[1], p3[0] - p2[0]))
+        p1 = points[left_path[i]]
+        p2 = points[left_path[i+1]]
+        p3 = points[left_path[i+2]]
+        angle = calculate_segment_angle(p1, p2, p3)
         if angle > np.pi / 2:
             seg_violations.append(('left', i, angle))
     
     for i in range(len(right_path) - 2):
-        p1 = np.array(points[right_path[i]])
-        p2 = np.array(points[right_path[i+1]])
-        p3 = np.array(points[right_path[i+2]])
-        angle = np.abs(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]) - 
-                      np.arctan2(p3[1] - p2[1], p3[0] - p2[0]))
+        p1 = points[right_path[i]]
+        p2 = points[right_path[i+1]]
+        p3 = points[right_path[i+2]]
+        angle = calculate_segment_angle(p1, p2, p3)
         if angle > np.pi / 2:
             seg_violations.append(('right', i, angle))
     
