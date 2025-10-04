@@ -1,7 +1,46 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from angle_utils import calculate_segment_angle
 
+def calculate_segment_angle(p1, p2, p3):
+    """
+    Calculate the angle between two consecutive line segments with proper angle wrapping.
+    
+    Args:
+        p1, p2, p3: Three consecutive points as numpy arrays or lists
+        
+    Returns:
+        float: Angle between segments in radians (0 to π)
+    """
+    p1 = np.array(p1)
+    p2 = np.array(p2) 
+    p3 = np.array(p3)
+    
+    # Calculate vectors for the two segments
+    v1 = p2 - p1  # First segment vector
+    v2 = p3 - p2  # Second segment vector
+    
+    # Handle edge case where points are too close
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
+    
+    if norm1 < 1e-6 or norm2 < 1e-6:
+        return 0.0  # Points are too close, consider no angle
+    
+    # Normalize vectors
+    v1_norm = v1 / norm1
+    v2_norm = v2 / norm2
+    
+    # Calculate dot product
+    dot_product = np.dot(v1_norm, v2_norm)
+    
+    # Clamp dot product to avoid numerical errors
+    dot_product = np.clip(dot_product, -1.0, 1.0)
+    
+    # Calculate angle using arccos
+    angle = np.arccos(dot_product)
+    
+    # Ensure angle is in [0, π] range
+    return np.abs(angle)
 
 def compute_iou(pred, gt):
     """Compute IoU between predicted and ground truth points"""
