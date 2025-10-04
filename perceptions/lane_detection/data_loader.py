@@ -8,9 +8,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
-import random
-import torch.nn.functional as F
-import math
 import sys
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
@@ -57,12 +54,17 @@ def generate_perceptual_field_data(
     return perceptual_field_data
 
 def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range):
+    """
+    Take all points within a certain range defined on the midpoint of two left and right boundary points. Also store all filtered boundary points
+    Returns a tuple
+    """
     all_filtered = []
     boundary_filtered = []
     left_x, left_y = cone_map.get(left_point)
     closest_right_x , closest_right_y = None
     min_dist_squared = sys.maxsize 
     
+    # Find right boundary point closest to left point
     for right_point in right_boundary:
         right_x, right_y = cone_map.get(right_point)
         new_dist_squared = (right_x - left_x)**2 + (right_y - left_y)**2
@@ -70,18 +72,20 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
             closest_right_x = right_x
             closest_right_y = right_y
             min_dist_squared = new_dist_squared
-             
+    
+    # Define the midpoint         
     mid_x = (left_x + closest_right_x)/2
     mid_y = (left_y + closest_right_y)/2
     
+    # Store all points within the perceptual range 
     for _, point in cone_map.items():
         x, y = cone_map.get(point)
-        if (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2:  # Check if the point is within the perceptual range
+        if (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2: 
             if (point in left_boundary) or (point in right_boundary):
-                boundary_filtered.append([x, y])    
+                boundary_filtered.append([x, y]) 
             all_filtered.append([x, y])
             
-    return (all_filtered, boundary_filtered)
+    return (all_filtered, boundary_filtered) 
 
 
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
