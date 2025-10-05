@@ -429,26 +429,29 @@ def enumerate_path_pairs(graph, points, sl, sr, itmax=100):
         left_adj = [v for v in graph[current_left[-1]] if v not in current_left]
         right_adj = [v for v in graph[current_right[-1]] if v not in current_right]
 
-        if len(current_left) == len(current_right) == 1:
+        if len(current_left) == 1:
             # TODO: Consider direction of car, not sure we have the tools in geo.py to do that
             pass
         else:
-            # NVD: sort left_adj, right_adj by absolute value of angle between last and new segment
-            if len(current_left) >= 2:
-                left_adj.sort(key=lambda k: calculate_segment_angle(
-                        points[current_left[-2]],
-                        points[current_left[-1]],
-                        points[k],
-                    )
+            # NVD: sort left_adj by absolute value of angle between last and new segment
+            left_adj.sort(key=lambda k: calculate_segment_angle(
+                    points[current_left[-2]],
+                    points[current_left[-1]],
+                    points[k],
                 )
+            )
 
-            if len(current_right) >= 2:
-                right_adj.sort(key=lambda k: calculate_segment_angle(
-                        points[current_right[-2]],
-                        points[current_right[-1]],
-                        points[k],
-                    )
+        if len(current_right) == 1:
+            # TODO: Consider direction of car, not sure we have the tools in geo.py to do that
+            pass
+        else:
+            # NVD: sort right_adj by absolute value of angle between last and new segment
+            right_adj.sort(key=lambda k: calculate_segment_angle(
+                    points[current_right[-2]],
+                    points[current_right[-1]],
+                    points[k],
                 )
+            )
 
         if not left_adj and not right_adj:
             return [path_pair]
