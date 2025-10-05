@@ -407,7 +407,7 @@ def debug_bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
     return result
 
 
-def enumerate_path_pairs(graph, sl, sr, itmax=100):
+def enumerate_path_pairs(graph, points, sl, sr, itmax=100):
     """
     Enumerate path pairs with improved backtracking based on constraint violations.
     Implements the paper's backtracking criteria for efficient pruning using the BT decider.
@@ -423,14 +423,41 @@ def enumerate_path_pairs(graph, sl, sr, itmax=100):
         solutions = []
         current_left, current_right = path_pair
 
+        # Mark newest left and right as visited
+        visited.update([current_left[-1], current_right[-1]])
+
         left_adj = [v for v in graph[current_left[-1]] if v not in current_left]
         right_adj = [v for v in graph[current_right[-1]] if v not in current_right]
+
+        if len(current_left) == len(current_right) == 1:
+            # TODO: Consider direction of car, not sure we have the tools in geo.py to do that
+            pass
+        else:
+            # NVD: sort left_adj, right_adj by absolute value of angle between last and new segment
+            if len(current_left) >= 2:
+                left_adj.sort(key=lambda k: calculate_segment_angle(
+                        points[current_left[-2]],
+                        points[current_left[-1]],
+                        points[k],
+                    )
+                )
+
+            if len(current_right) >= 2:
+                right_adj.sort(key=lambda k: calculate_segment_angle(
+                        points[current_right[-2]],
+                        points[current_right[-1]],
+                        points[k],
+                    )
+                )
 
         if not left_adj and not right_adj:
             return [path_pair]
 
         for ln in left_adj:
             for rn in right_adj:
+                if (ln in visited or rn in visited):
+                    continue
+
                 new_pair = (current_left + [ln], current_right + [rn])
 
                 # Use BT decider for sophisticated backtracking logic
@@ -454,6 +481,9 @@ def enumerate_path_pairs(graph, sl, sr, itmax=100):
                     # The decision is based on sophisticated analysis of constraint violations
                     # No further exploration from this path
                     pass
+
+        # Mark newest left and right as unvisited
+        visited.difference_update([current_left[-1], current_right[-1]])
 
         return solutions
 
@@ -556,43 +586,45 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     # Plot each path pair
     colors = plt.cm.tab10(np.linspace(0, 1, len(path_pairs)))
     for i, (left_path, right_path) in enumerate(path_pairs):
-        color = colors[i]
+        # Specific path for 'points' below (too many paths to draw all)
+        if i == 25:
+            color = colors[i]
 
-        # Plot left path
-        left_coords = np.array([points[j] for j in left_path])
-        plt.plot(
-            left_coords[:, 0],
-            left_coords[:, 1],
-            "o-",
-            color=color,
-            linewidth=2,
-            markersize=8,
-            label=f"Left {i+1}",
-        )
-
-        # Plot right path
-        right_coords = np.array([points[j] for j in right_path])
-        plt.plot(
-            right_coords[:, 0],
-            right_coords[:, 1],
-            "s-",
-            color=color,
-            linewidth=2,
-            markersize=8,
-            label=f"Right {i+1}",
-        )
-
-        # Plot matching lines
-        matching_lines = find_matching_points(left_path, right_path, points)
-        for match in matching_lines:
+            # Plot left path
+            left_coords = np.array([points[j] for j in left_path])
             plt.plot(
-                [match["left_point"][0], match["right_point"][0]],
-                [match["left_point"][1], match["right_point"][1]],
-                "--",
+                left_coords[:, 0],
+                left_coords[:, 1],
+                "o-",
                 color=color,
-                alpha=0.5,
-                linewidth=1,
+                linewidth=2,
+                markersize=8,
+                label=f"Left {i+1}",
             )
+
+            # Plot right path
+            right_coords = np.array([points[j] for j in right_path])
+            plt.plot(
+                right_coords[:, 0],
+                right_coords[:, 1],
+                "s-",
+                color=color,
+                linewidth=2,
+                markersize=8,
+                label=f"Right {i+1}",
+            )
+
+            # Plot matching lines
+            matching_lines = find_matching_points(left_path, right_path, points)
+            for match in matching_lines:
+                plt.plot(
+                    [match["left_point"][0], match["right_point"][0]],
+                    [match["left_point"][1], match["right_point"][1]],
+                    "--",
+                    color=color,
+                    alpha=0.5,
+                    linewidth=1,
+                )
 
     plt.xlabel("X")
     plt.ylabel("Y")
@@ -606,16 +638,41 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
 
 # Example usage:
 points = [
-    (0, 0),
-    (0, 3),
-    (0, 6),
-    (0, 9),
-    (0, 12),
+    # inner loop
     (4, 0),
-    (4, 3),
+    (4, 2),
+    (2, 4),
+    (0, 4),
+    (-2, 4),
+    (-4, 2),
+    (-4, 0),
+    (-4, -2),
+    (-2, -4),
+    (0, -4),
+    (2, -4),
+    (4, -2),
+    # outer loop
+    (8, 0),
+    (8, 2),
+    (6, 4),
     (4, 6),
-    (4, 9),
-    (4, 12),
+    (2, 8),
+    (0, 8),
+    (-2, 8),
+    (-4, 6),
+    (-6, 4),
+    (-8, 2),
+    (-8, 0),
+    (-8, -2),
+    (-6, -4),
+    (-4, -6),
+    (-2, -8),
+    (0, -8),
+    (2, -8),
+    (4, -6),
+    (6, -4),
+    (8, -2),
+    
 ]  # Example set of 2D points
 # points = [(0, 0), (0, 3), (4, 0), (4, 3)]  # Example set of 2D points
 dmax = 5
@@ -624,14 +681,14 @@ print("Original points:", points)
 print("Adjacency list:", adj_list)
 
 # Find path pairs with improved constraints
-path_pairs = enumerate_path_pairs(adj_list, 0, 2)
+path_pairs = enumerate_path_pairs(adj_list, points, 0, 12)
 print(f"Found {len(path_pairs)} valid path pairs:")
 for i, pair in enumerate(path_pairs):
     print(f"  Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
 
 # Generate feature pairs
-feature_pairs = generate_feature_pairs(path_pairs, points)
-print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
+# feature_pairs = generate_feature_pairs(path_pairs, points)
+# print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
 
 # Visualize results
 if path_pairs:
