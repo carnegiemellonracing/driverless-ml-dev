@@ -78,29 +78,28 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
     # Define the midpoint         
     mid_x = (left_x + closest_right_x)/2
     mid_y = (left_y + closest_right_y)/2
+    
+    car_x = mid_x
+    car_y = mid_y
+    car_heading_deg = math.degrees(math.atan((left_x - closest_right_x) / (left_y - closest_right_y))) 
 
     # Store all points within the perceptual range 
     for _, point in cone_map.items():
         x, y = cone_map.get(point)
-        if (within_cone(x, y, mid_x, mid_y) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2) or (x == mid_x and y == mid_y): 
+        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, 120) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2) or (x == mid_x and y == mid_y): 
             if (point in left_boundary) or (point in right_boundary):
                 boundary_filtered.append([x, y]) 
             all_filtered.append([x, y])
             
-    car_x = mid_x
-    car_y = mid_y
-    car_heading = math.atan(mid_x / mid_y)
-            
-    return (all_filtered, boundary_filtered, car_x, car_y, car_heading)
+    return (all_filtered, boundary_filtered, car_x, car_y, car_heading_deg)
 
-def within_cone(x, y, mid_x, mid_y):
+def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
     """
-    Checks if the given coordinates are within the 120 degree "cone" starting at (mid_x, mid_y)
+    Checks if the given coordinates are within the "cone" with angle cone_angle and starting at (mid_x, mid_y)
     """
-    if y >= 1/math.sqrt(3)(math.abs(x) - mid_x) + mid_y:
-        return True
-    return False
-
+    # Todo: implement, figure out how determine direction of car/cone (0 vs 180 from perpendicular line)
+    pass
+    
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
     noisy_points = []
     for point in points:
