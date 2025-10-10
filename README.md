@@ -9,3 +9,6 @@ pip install -r requirements.txt
 
 deactivate
 ```
+
+# Set desktop wallpaper
+`feh --bg-scale <path-to-image>`
