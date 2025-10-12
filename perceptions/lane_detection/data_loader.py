@@ -47,14 +47,15 @@ def generate_perceptual_field_data(
         right_boundary = boundary["right"]
 
         # Filter out points outside perceptual range. Generate a perceptual field using every left point
+        car_heading_deg = 0.0 # By convention - can change
         for left_point in left_boundary:
-            filtered_points, filtered_boundary = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range)
+            filtered_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, car_heading_deg)
             noisy_points = add_noise(filtered_points, noise_rate)
-            perceptual_field_data.append((noisy_points, filtered_boundary))
+            perceptual_field_data.append((noisy_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg))
     
     return perceptual_field_data
 
-def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range):
+def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, prev_heading_deg):
     """
     Returns:
     - List of all points within a certain range defined on the midpoint of two left and right boundary points
@@ -79,26 +80,40 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
     mid_x = (left_x + closest_right_x)/2
     mid_y = (left_y + closest_right_y)/2
     
-    car_x = mid_x
-    car_y = mid_y
-    car_heading_deg = math.degrees(math.atan((left_x - closest_right_x) / (left_y - closest_right_y))) 
+    # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
+    car_heading_deg = math.degrees(math.atan((left_y - closest_right_y) / (left_x - closest_right_x)))
+    CONE_ANGLE_DEG = 120.0
+
+    # Ensures that direction car travels is standard
+    car_heading_diff = math.abs(prev_heading_deg - car_heading_deg)
+    if car_heading_deg <= 0 and math.abs(prev_heading_deg - (car_heading_deg + 180.0)) < car_heading_diff:
+        car_heading_deg += 180.0
+    elif car_heading_deg > 0 and math.abs(prev_heading_deg - (car_heading_deg - 180.0)) < car_heading_diff:
+        car_heading_deg -= 180.0
 
     # Store all points within the perceptual range 
     for _, point in cone_map.items():
         x, y = cone_map.get(point)
-        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, 120) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2) or (x == mid_x and y == mid_y): 
+        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
             if (point in left_boundary) or (point in right_boundary):
                 boundary_filtered.append([x, y]) 
             all_filtered.append([x, y])
             
-    return (all_filtered, boundary_filtered, car_x, car_y, car_heading_deg)
+    return (all_filtered, boundary_filtered, (left_x, left_y), (closest_right_x, closest_right_y), car_heading_deg)
 
 def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
     """
-    Checks if the given coordinates are within the "cone" with angle cone_angle and starting at (mid_x, mid_y)
+    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
+    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
     """
-    # Todo: implement, figure out how determine direction of car/cone (0 vs 180 from perpendicular line)
-    pass
+    slope_deg = -math.degrees(math.atan((x - mid_x) / (y - mid_y)))
+    if x < 0 and y < 0:
+        slope_deg += 180.0
+    elif x > 0 and y < 0:
+        slope_deg -= 180.0
+    if slope_deg < car_heading_deg + cone_angle_deg / 2 and slope_deg > car_heading_deg - cone_angle_deg:
+        return True
+    return False
     
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
     noisy_points = []
