@@ -1,60 +1,19 @@
-import matplotlib.pyplot as plt
+from warnings import deprecated
 import numpy as np
+import matplotlib.pyplot as plt
+from angle_utils import calculate_segment_angle
 
-
-def calculate_segment_angle(p1, p2, p3):
-    """
-    Calculate the angle between two consecutive line segments with proper angle wrapping.
-
-    Args:
-        p1, p2, p3: Three consecutive points as numpy arrays or lists
-
-    Returns:
-        float: Angle between segments in radians (0 to π)
-    """
-    p1 = np.array(p1)
-    p2 = np.array(p2)
-    p3 = np.array(p3)
-
-    # Calculate vectors for the two segments
-    v1 = p2 - p1  # First segment vector
-    v2 = p3 - p2  # Second segment vector
-
-    # Handle edge case where points are too close
-    norm1 = np.linalg.norm(v1)
-    norm2 = np.linalg.norm(v2)
-
-    if norm1 < 1e-6 or norm2 < 1e-6:
-        return 0.0  # Points are too close, consider no angle
-
-    # Normalize vectors
-    v1_norm = v1 / norm1
-    v2_norm = v2 / norm2
-
-    # Calculate dot product
-    dot_product = np.dot(v1_norm, v2_norm)
-
-    # Clamp dot product to avoid numerical errors
-    dot_product = np.clip(dot_product, -1.0, 1.0)
-
-    # Calculate angle using arccos
-    angle = np.arccos(dot_product)
-
-    # Ensure angle is in [0, π] range
-    return np.abs(angle)
-
-
-def compute_iou(pred, gt):
-    """Compute IoU between predicted and ground truth points"""
-    # Convert to sets of points for IoU calculation
-    pred_set = set(map(tuple, pred.reshape(-1, 2)))
-    gt_set = set(map(tuple, gt.reshape(-1, 2)))
-
-    # Calculate intersection and union
-    intersection = len(pred_set.intersection(gt_set))
-    union = len(pred_set.union(gt_set))
-
-    return intersection / max(union, 1)  # Avoid division by zero
+# Export list for clean imports
+__all__ = [
+    "construct_adjacency_list",
+    "enumerate_path_pairs",
+    "enumerate_path_pairs_v2",
+    "next_vertex_decider",
+    "left_right_decider",
+    "constraint_decider",
+    "compute_features",
+    "generate_feature_pairs",
+]
 
 
 def construct_adjacency_list(points, dmax):
@@ -407,7 +366,8 @@ def debug_bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
     return result
 
 
-def enumerate_path_pairs(graph, points, sl, sr, itmax=100):
+@deprecated
+def enumerate_path_pairs(graph, sl, sr, itmax=100):
     """
     Enumerate path pairs with improved backtracking based on constraint violations.
     Implements the paper's backtracking criteria for efficient pruning using the BT decider.
@@ -423,35 +383,8 @@ def enumerate_path_pairs(graph, points, sl, sr, itmax=100):
         solutions = []
         current_left, current_right = path_pair
 
-        # Mark newest left and right as visited
-        visited.update([current_left[-1], current_right[-1]])
-
         left_adj = [v for v in graph[current_left[-1]] if v not in current_left]
         right_adj = [v for v in graph[current_right[-1]] if v not in current_right]
-
-        if len(current_left) == 1:
-            # TODO: Consider direction of car, not sure we have the tools in geo.py to do that
-            pass
-        else:
-            # NVD: sort left_adj by absolute value of angle between last and new segment
-            left_adj.sort(key=lambda k: calculate_segment_angle(
-                    points[current_left[-2]],
-                    points[current_left[-1]],
-                    points[k],
-                )
-            )
-
-        if len(current_right) == 1:
-            # TODO: Consider direction of car, not sure we have the tools in geo.py to do that
-            pass
-        else:
-            # NVD: sort right_adj by absolute value of angle between last and new segment
-            right_adj.sort(key=lambda k: calculate_segment_angle(
-                    points[current_right[-2]],
-                    points[current_right[-1]],
-                    points[k],
-                )
-            )
 
         if not left_adj and not right_adj:
             return [path_pair]
@@ -485,12 +418,271 @@ def enumerate_path_pairs(graph, points, sl, sr, itmax=100):
                     # No further exploration from this path
                     pass
 
-        # Mark newest left and right as unvisited
-        visited.difference_update([current_left[-1], current_right[-1]])
-
         return solutions
 
     return dfs(([sl], [sr]), set(), 0)
+
+
+# ============================================================================
+# CORRECT PATH PAIR ENUMERATION (Algorithm 2 from Paper)
+# ============================================================================
+
+
+def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=None):
+    """
+    Next-Vertex-Decider (NVD): Select adjacent vertex with smallest angle.
+
+    Args:
+        current_path: List of vertex indices in current path
+        adjacent_vertices: List of unvisited adjacent vertex indices
+        points: List of [x, y] coordinates
+        heading_vector: Initial heading direction (optional, for first step)
+
+    Returns:
+        Index of selected vertex (the one with smallest angle)
+    """
+    if len(current_path) < 1 or len(adjacent_vertices) == 0:
+        return None
+
+    if len(current_path) == 1:
+        # Use heading vector if provided, otherwise choose first available
+        if heading_vector is None:
+            return adjacent_vertices[0]
+
+        current_point = np.array(points[current_path[-1]])
+        min_angle = float("inf")
+        best_vertex = adjacent_vertices[0]
+
+        for vertex in adjacent_vertices:
+            next_point = np.array(points[vertex])
+            direction = next_point - current_point
+            direction_norm = direction / (np.linalg.norm(direction) + 1e-8)
+
+            # Angle between heading and potential direction
+            angle = np.arccos(
+                np.clip(np.dot(heading_vector, direction_norm), -1.0, 1.0)
+            )
+
+            if angle < min_angle:
+                min_angle = angle
+                best_vertex = vertex
+
+        return best_vertex
+
+    # Calculate angle between previous segment and potential next segment
+    prev_point = np.array(points[current_path[-2]])
+    current_point = np.array(points[current_path[-1]])
+    prev_segment = current_point - prev_point
+
+    min_angle = float("inf")
+    best_vertex = adjacent_vertices[0]
+
+    for vertex in adjacent_vertices:
+        next_point = np.array(points[vertex])
+        next_segment = next_point - current_point
+
+        # Compute angle between segments
+        angle = np.arctan2(next_segment[1], next_segment[0]) - np.arctan2(
+            prev_segment[1], prev_segment[0]
+        )
+        angle = np.abs(angle)
+
+        # Normalize to [0, pi]
+        if angle > np.pi:
+            angle = 2 * np.pi - angle
+
+        if angle < min_angle:
+            min_angle = angle
+            best_vertex = vertex
+
+    return best_vertex
+
+
+def left_right_decider(left_path, right_path, points):
+    """
+    Left-Right-Decider (LRD): Choose which path to extend to keep them equally advanced.
+
+    Args:
+        left_path: Current left path (list of vertex indices)
+        right_path: Current right path (list of vertex indices)
+        points: List of [x, y] coordinates
+
+    Returns:
+        'left' or 'right' indicating which path to extend
+    """
+    if len(left_path) < 2 and len(right_path) < 2:
+        # Extend both equally at start
+        return "left" if len(left_path) <= len(right_path) else "right"
+
+    # Compute angle of last segment for each path
+    def get_last_segment_angle(path):
+        if len(path) < 2:
+            return 0.0
+        prev_point = np.array(points[path[-2]])
+        curr_point = np.array(points[path[-1]])
+        segment = curr_point - prev_point
+        return np.arctan2(segment[1], segment[0])
+
+    left_angle = get_last_segment_angle(left_path)
+    right_angle = get_last_segment_angle(right_path)
+
+    # Compute distance from origin for each path
+    left_dist = np.linalg.norm(np.array(points[left_path[-1]]))
+    right_dist = np.linalg.norm(np.array(points[right_path[-1]]))
+
+    # Extend the path that is less advanced (closer to origin)
+    if abs(left_dist - right_dist) > 0.5:  # If distance difference is significant
+        return "left" if left_dist < right_dist else "right"
+
+    # Otherwise, extend the path with smaller angle difference
+    return "left" if len(left_path) <= len(right_path) else "right"
+
+
+def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=None):
+    """
+    Correct implementation of Algorithm 2: Enumerate Path Pairs (EPP).
+
+    Uses Next-Vertex-Decider (NVD) and Left-Right-Decider (LRD) heuristics
+    to efficiently explore valid path pairs.
+
+    Args:
+        graph: Adjacency list {vertex_idx: [adjacent_vertices]}
+        points: List of [x, y] coordinates
+        sl: Starting vertex index for left path
+        sr: Starting vertex index for right path
+        itmax: Maximum iterations (default: 2500)
+        heading_vector: Initial heading direction [dx, dy] (optional)
+
+    Returns:
+        List of valid path pairs: [([left_path], [right_path]), ...]
+    """
+    solutions = []
+
+    def backtrack(left_path, right_path, visited_left, visited_right, iteration):
+        nonlocal solutions
+
+        if iteration >= itmax:
+            return
+
+        # Get unvisited adjacent vertices
+        left_adj = [v for v in graph[left_path[-1]] if v not in visited_left]
+        right_adj = [v for v in graph[right_path[-1]] if v not in visited_right]
+
+        # If no more vertices, this is a terminal path pair
+        if not left_adj and not right_adj:
+            if (
+                len(left_path) > 1 and len(right_path) > 1
+            ):  # Valid path has at least 2 vertices
+                solutions.append((left_path[:], right_path[:]))
+            return
+
+        # Try extending paths
+        if left_adj and right_adj:
+            # Use NVD to select best next vertices
+            left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
+            right_next = next_vertex_decider(
+                right_path, right_adj, points, heading_vector
+            )
+
+            if left_next is not None and right_next is not None:
+                # Try extending both paths
+                new_left = left_path + [left_next]
+                new_right = right_path + [right_next]
+                new_pair = (new_left, new_right)
+
+                # Check constraints
+                if constraint_decider(new_pair):
+                    # Add to solutions
+                    solutions.append((new_left[:], new_right[:]))
+
+                    # Continue search
+                    backtrack(
+                        new_left,
+                        new_right,
+                        visited_left | {left_next},
+                        visited_right | {right_next},
+                        iteration + 1,
+                    )
+
+        elif left_adj:
+            # Only left path can be extended
+            left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
+            if left_next is not None:
+                new_left = left_path + [left_next]
+                new_pair = (new_left, right_path)
+
+                if constraint_decider(new_pair):
+                    solutions.append((new_left[:], right_path[:]))
+                    backtrack(
+                        new_left,
+                        right_path,
+                        visited_left | {left_next},
+                        visited_right,
+                        iteration + 1,
+                    )
+
+        elif right_adj:
+            # Only right path can be extended
+            right_next = next_vertex_decider(
+                right_path, right_adj, points, heading_vector
+            )
+            if right_next is not None:
+                new_right = right_path + [right_next]
+                new_pair = (left_path, new_right)
+
+                if constraint_decider(new_pair):
+                    solutions.append((left_path[:], new_right[:]))
+                    backtrack(
+                        left_path,
+                        new_right,
+                        visited_left,
+                        visited_right | {right_next},
+                        iteration + 1,
+                    )
+
+    # Initialize heading vector if not provided (forward direction)
+    if heading_vector is None:
+        heading_vector = np.array([1.0, 0.0])
+    else:
+        heading_vector = np.array(heading_vector)
+        heading_vector = heading_vector / (np.linalg.norm(heading_vector) + 1e-8)
+
+    # Start backtracking
+    backtrack([sl], [sr], {sl}, {sr}, 0)
+
+    return solutions
+
+
+def constraint_decider(path_pair):
+    def Cseg(path_pair):
+        for i in range(len(path_pair[0]) - 2):
+            p1 = points[path_pair[0][i]]
+            p2 = points[path_pair[0][i + 1]]
+            p3 = points[path_pair[0][i + 2]]
+
+            angle = np.abs(
+                np.arctan2(p2[1] - p1[1], p2[0] - p1[0])
+                - np.arctan2(p3[1] - p2[1], p3[0] - p2[0])
+            )
+
+            if angle > np.pi / 2:
+                return False
+        return True
+
+    def Cwidth(path_pair, wmin=2.5, wmax=6.5):
+        left = path_pair[0]
+        right = path_pair[1]
+
+        for i in range(min(len(left), len(right))):
+            left_point = np.array(points[left[i]])
+            right_point = np.array(points[right[i]])
+            width = np.linalg.norm(left_point - right_point)
+
+            if not (wmin < width < wmax):
+                return False
+        return True
+
+    return Cseg(path_pair) and Cwidth(path_pair)
 
 
 def compute_features(path_pair, points):
@@ -589,45 +781,43 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     # Plot each path pair
     colors = plt.cm.tab10(np.linspace(0, 1, len(path_pairs)))
     for i, (left_path, right_path) in enumerate(path_pairs):
-        # Specific path for 'points' below (too many paths to draw all)
-        if i == 25:
-            color = colors[i]
+        color = colors[i]
 
-            # Plot left path
-            left_coords = np.array([points[j] for j in left_path])
+        # Plot left path
+        left_coords = np.array([points[j] for j in left_path])
+        plt.plot(
+            left_coords[:, 0],
+            left_coords[:, 1],
+            "o-",
+            color=color,
+            linewidth=2,
+            markersize=8,
+            label=f"Left {i+1}",
+        )
+
+        # Plot right path
+        right_coords = np.array([points[j] for j in right_path])
+        plt.plot(
+            right_coords[:, 0],
+            right_coords[:, 1],
+            "s-",
+            color=color,
+            linewidth=2,
+            markersize=8,
+            label=f"Right {i+1}",
+        )
+
+        # Plot matching lines
+        matching_lines = find_matching_points(left_path, right_path, points)
+        for match in matching_lines:
             plt.plot(
-                left_coords[:, 0],
-                left_coords[:, 1],
-                "o-",
+                [match["left_point"][0], match["right_point"][0]],
+                [match["left_point"][1], match["right_point"][1]],
+                "--",
                 color=color,
-                linewidth=2,
-                markersize=8,
-                label=f"Left {i+1}",
+                alpha=0.5,
+                linewidth=1,
             )
-
-            # Plot right path
-            right_coords = np.array([points[j] for j in right_path])
-            plt.plot(
-                right_coords[:, 0],
-                right_coords[:, 1],
-                "s-",
-                color=color,
-                linewidth=2,
-                markersize=8,
-                label=f"Right {i+1}",
-            )
-
-            # Plot matching lines
-            matching_lines = find_matching_points(left_path, right_path, points)
-            for match in matching_lines:
-                plt.plot(
-                    [match["left_point"][0], match["right_point"][0]],
-                    [match["left_point"][1], match["right_point"][1]],
-                    "--",
-                    color=color,
-                    alpha=0.5,
-                    linewidth=1,
-                )
 
     plt.xlabel("X")
     plt.ylabel("Y")
@@ -641,41 +831,16 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
 
 # Example usage:
 points = [
-    # inner loop
+    (0, 0),
+    (0, 3),
+    (0, 6),
+    (0, 9),
+    (0, 12),
     (4, 0),
-    (4, 2),
-    (2, 4),
-    (0, 4),
-    (-2, 4),
-    (-4, 2),
-    (-4, 0),
-    (-4, -2),
-    (-2, -4),
-    (0, -4),
-    (2, -4),
-    (4, -2),
-    # outer loop
-    (8, 0),
-    (8, 2),
-    (6, 4),
+    (4, 3),
     (4, 6),
-    (2, 8),
-    (0, 8),
-    (-2, 8),
-    (-4, 6),
-    (-6, 4),
-    (-8, 2),
-    (-8, 0),
-    (-8, -2),
-    (-6, -4),
-    (-4, -6),
-    (-2, -8),
-    (0, -8),
-    (2, -8),
-    (4, -6),
-    (6, -4),
-    (8, -2),
-    
+    (4, 9),
+    (4, 12),
 ]  # Example set of 2D points
 # points = [(0, 0), (0, 3), (4, 0), (4, 3)]  # Example set of 2D points
 dmax = 5
