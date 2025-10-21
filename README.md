@@ -12,3 +12,5 @@ deactivate
 
 # Set desktop wallpaper
 `feh --bg-scale <path-to-image>`
+
+Inference images are not uploaded to the github, login to dale and see
