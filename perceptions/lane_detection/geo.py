@@ -495,7 +495,7 @@ def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=
     return best_vertex
 
 
-def left_right_decider(left_path, right_path, points):
+def left_right_decider(left_path, right_path, points, left_candidate, right_candidate):
     """
     Left-Right-Decider (LRD): Choose which path to extend to keep them equally advanced.
 
@@ -503,37 +503,29 @@ def left_right_decider(left_path, right_path, points):
         left_path: Current left path (list of vertex indices)
         right_path: Current right path (list of vertex indices)
         points: List of [x, y] coordinates
+        left_candidate: candidate for the left path
+        right_candidate: candidate for the right path
 
     Returns:
-        'left' or 'right' indicating which path to extend
+        0 for left, 1 for right
     """
-    if len(left_path) < 2 and len(right_path) < 2:
-        # Extend both equally at start
-        return "left" if len(left_path) <= len(right_path) else "right"
+    if len(left_path) < 1 and len(right_path) < 1:
+        return 0;
 
-    # Compute angle of last segment for each path
-    def get_last_segment_angle(path):
-        if len(path) < 2:
-            return 0.0
-        prev_point = np.array(points[path[-2]])
-        curr_point = np.array(points[path[-1]])
-        segment = curr_point - prev_point
-        return np.arctan2(segment[1], segment[0])
+    left_seg = points[left_candidate] - points[left_path[-1]]
+    right_seg = points[right_candidate] - points[right_path[-1]]
+    left_to_right_seg = points[left_candidate] - points[right_path[-1]]
+    right_to_left_seg = points[right_candidate] - points[left_path[-1]]
 
-    left_angle = get_last_segment_angle(left_path)
-    right_angle = get_last_segment_angle(right_path)
+    def get_segment_angle(seg1, seg2):
+        return np.arctan2(seg2[1], seg2[0]) - np.arctan2(seg1[1], seg1[0])
 
-    # Compute distance from origin for each path
-    left_dist = np.linalg.norm(np.array(points[left_path[-1]]))
-    right_dist = np.linalg.norm(np.array(points[right_path[-1]]))
+    left_angle = get_segment_angle(left_seg, left_to_right_seg)
+    right_angle = get_segment_angle(right_seg, right_to_left_seg)
 
-    # Extend the path that is less advanced (closer to origin)
-    if abs(left_dist - right_dist) > 0.5:  # If distance difference is significant
-        return "left" if left_dist < right_dist else "right"
-
-    # Otherwise, extend the path with smaller angle difference
-    return "left" if len(left_path) <= len(right_path) else "right"
-
+    if abs(left_angle) < abs(right_angle):
+        return 0
+    return 1
 
 def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=None):
     """
