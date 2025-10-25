@@ -2,11 +2,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
-import random
+from torch.utils.data import DataLoader
 import torch.nn.functional as F
-from data_loader import *
-from model import *
+from data_loader import LaneDetectionDataset, generate_perceptual_field_data
+from model import ConeClassifier
 
 def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50, optimizer_ = optim.Adam):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)

@@ -1,6 +1,5 @@
 import torch.nn as nn
 import torch.nn.functional as F
-from data_loader import *
 
 # 4. Define the model architecture with regularization
 class ConeClassifier(nn.Module):
