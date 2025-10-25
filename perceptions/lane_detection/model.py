@@ -1,10 +1,6 @@
-import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 from data_loader import *
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
-
 
 # 4. Define the model architecture with regularization
 class ConeClassifier(nn.Module):
