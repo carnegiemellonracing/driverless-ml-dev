@@ -7,7 +7,10 @@ from angle_utils import calculate_segment_angle
 
 # Export list for clean imports
 __all__ = [
+    "point_to_segment_distance",
     "construct_adjacency_list",
+    "find_matching_segments",
+    "find_matching_points",
     "enumerate_path_pairs",
     "enumerate_path_pairs_v2",
     "next_vertex_decider",
@@ -16,6 +19,56 @@ __all__ = [
     "compute_features",
     "generate_feature_pairs",
 ]
+
+
+def point_to_segment_distance(point, seg_start, seg_end):
+    """
+    Calculate perpendicular distance from a point to a line segment.
+    Uses projection with clamping to segment bounds.
+
+    Based on the paper's approach for accurate lane width calculation
+    between boundaries marked by points.
+
+    Args:
+        point: 2D point coordinates as numpy array
+        seg_start: Segment start point as numpy array
+        seg_end: Segment end point as numpy array
+
+    Returns:
+        tuple: (distance, projection_point)
+            - distance: Perpendicular distance from point to segment
+            - projection_point: Point on segment closest to input point
+    """
+    point = np.array(point)
+    seg_start = np.array(seg_start)
+    seg_end = np.array(seg_end)
+
+    # Vector from segment start to end
+    seg_vec = seg_end - seg_start
+    # Vector from segment start to point
+    point_vec = point - seg_start
+
+    # Compute projection parameter t
+    seg_length_sq = np.dot(seg_vec, seg_vec)
+
+    # Handle degenerate segment (start == end)
+    if seg_length_sq < 1e-8:
+        distance = np.linalg.norm(point_vec)
+        return distance, seg_start
+
+    # Project point onto line containing segment
+    t = np.dot(point_vec, seg_vec) / seg_length_sq
+
+    # Clamp t to [0, 1] to keep projection on segment
+    t_clamped = np.clip(t, 0.0, 1.0)
+
+    # Compute projection point on segment
+    projection = seg_start + t_clamped * seg_vec
+
+    # Compute distance from point to projection
+    distance = np.linalg.norm(point - projection)
+
+    return distance, projection
 
 
 def construct_adjacency_list(points, dmax):
@@ -30,19 +83,97 @@ def construct_adjacency_list(points, dmax):
     return adjacency_list
 
 
-def find_matching_points(left_path, right_path, points, fixed_matches=None):
+def find_matching_segments(left_path, right_path, points, fixed_matches=None):
     """
-    Find matching points between left and right boundaries using nearest neighbor search.
-    Based on the paper's matching algorithm (Equation 9).
+    Hybrid approach: Uses nearest neighbor search for point matching combined
+    with perpendicular distance to segments for accurate width calculation.
+
+    Based on the paper's matching algorithm (Equation 9) with segment-based
+    distance calculation for proper lane width measurement.
 
     Args:
         left_path: List of indices for left boundary points
         right_path: List of indices for right boundary points
         points: List of 2D coordinates
-        fixed_matches: Set of (left_idx, right_idx) tuples that are already fixed
+        fixed_matches: Set of (left_idx, (right_seg_start_idx, right_seg_end_idx))
+                      tuples that are already fixed
 
     Returns:
-        List of matching line dictionaries with width and fixed/mutable status
+        List of matching line dictionaries with perpendicular width and fixed/mutable status
+    """
+    if fixed_matches is None:
+        fixed_matches = set()
+
+    left_coords = np.array([points[i] for i in left_path])
+    right_coords = np.array([points[i] for i in right_path])
+
+    matching_lines = []
+
+    # Need at least 2 points to form segments
+    if len(right_path) < 2:
+        # Fallback to point-to-point for edge case
+        for i, left_point in enumerate(left_coords):
+            if len(right_coords) > 0:
+                distances = np.linalg.norm(right_coords - left_point, axis=1)
+                nearest_idx = np.argmin(distances)
+                matching_lines.append(
+                    {
+                        "left_idx": i,
+                        "right_seg": (nearest_idx, nearest_idx),
+                        "left_point": left_point,
+                        "projection_point": right_coords[nearest_idx],
+                        "width": distances[nearest_idx],
+                        "is_fixed": False,
+                    }
+                )
+        return matching_lines
+
+    # For each point on the left boundary, find nearest segment on right boundary
+    for i, left_point in enumerate(left_coords):
+        min_distance = float("inf")
+        best_seg_idx = 0
+        best_projection = None
+
+        # Check all segments on the right boundary
+        for j in range(len(right_path) - 1):
+            seg_start = right_coords[j]
+            seg_end = right_coords[j + 1]
+
+            # Calculate perpendicular distance to this segment
+            distance, projection = point_to_segment_distance(
+                left_point, seg_start, seg_end
+            )
+
+            if distance < min_distance:
+                min_distance = distance
+                best_seg_idx = j
+                best_projection = projection
+
+        # Check if this is a fixed match
+        seg_tuple = (best_seg_idx, best_seg_idx + 1)
+        is_fixed = (i, seg_tuple) in fixed_matches
+
+        matching_lines.append(
+            {
+                "left_idx": i,
+                "right_seg": seg_tuple,  # (start_idx, end_idx) of matched segment
+                "left_point": left_point,
+                "projection_point": best_projection,
+                "width": min_distance,  # Perpendicular distance
+                "is_fixed": is_fixed,
+            }
+        )
+
+    return matching_lines
+
+
+# Keep old function for backward compatibility (deprecated)
+def find_matching_points(left_path, right_path, points, fixed_matches=None):
+    """
+    DEPRECATED: Use find_matching_segments for paper-accurate width calculation.
+
+    Old point-to-point matching using simple Euclidean distance.
+    Kept for backward compatibility only.
     """
     if fixed_matches is None:
         fixed_matches = set()
@@ -124,6 +255,8 @@ def constraint_decider(path_pair, debug=False):
     def Cwidth(path_pair, wmin=2.5, wmax=6.5):
         """
         Width constraint based on the paper's approach.
+        Uses perpendicular distance to segments for accurate width calculation.
+
         Implements the three backtracking criteria from the paper:
         1. Fixed matching lines that are too long/short cannot be fixed
         2. Mutable matching lines that are too short cannot be fixed
@@ -134,12 +267,12 @@ def constraint_decider(path_pair, debug=False):
         if len(left_path) < 2 or len(right_path) < 2:
             return True  # Not enough points to check width
 
-        # Find matching points using nearest neighbor search
-        matching_lines = find_matching_points(left_path, right_path, points)
+        # Find matching segments using paper-accurate perpendicular distance
+        matching_lines = find_matching_segments(left_path, right_path, points)
 
         # Check width constraints for all matching lines
         for match in matching_lines:
-            width = match["width"]
+            width = match["width"]  # Now using perpendicular distance
 
             if not (wmin < width < wmax):
                 # Apply paper's backtracking criteria
@@ -250,14 +383,15 @@ def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
         violations.append(("seg_angle", seg_violations))
 
     # Check width constraint (C_width) with detailed analysis
+    # Uses perpendicular distance to segments for accurate width measurement
     width_violations = []
     if len(left_path) >= 2 and len(right_path) >= 2:
-        matching_lines = find_matching_points(
+        matching_lines = find_matching_segments(
             left_path, right_path, points, fixed_matches
         )
 
         for match in matching_lines:
-            width = match["width"]
+            width = match["width"]  # Now perpendicular distance to segment
             is_fixed = match["is_fixed"]
 
             if width < wmin:
@@ -732,6 +866,11 @@ def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=No
 
 
 def constraint_decider(path_pair):
+    """
+    Simplified constraint decider for basic path validation.
+    Updated to use paper-accurate segment-based width calculation.
+    """
+
     def Cseg(path_pair):
         for i in range(len(path_pair[0]) - 2):
             p1 = points[path_pair[0][i]]
@@ -748,14 +887,20 @@ def constraint_decider(path_pair):
         return True
 
     def Cwidth(path_pair, wmin=2.5, wmax=6.5):
+        """
+        Width constraint using paper-accurate perpendicular distance to segments.
+        """
         left = path_pair[0]
         right = path_pair[1]
 
-        for i in range(min(len(left), len(right))):
-            left_point = np.array(points[left[i]])
-            right_point = np.array(points[right[i]])
-            width = np.linalg.norm(left_point - right_point)
+        if len(left) < 2 or len(right) < 2:
+            return True  # Not enough points to check width
 
+        # Use segment-based matching for accurate width calculation
+        matching_lines = find_matching_segments(left, right, points)
+
+        for match in matching_lines:
+            width = match["width"]  # Perpendicular distance to segment
             if not (wmin < width < wmax):
                 return False
         return True
@@ -765,7 +910,8 @@ def constraint_decider(path_pair):
 
 def compute_features(path_pair, points):
     """
-    Compute features for a path pair using the improved matching algorithm.
+    Compute features for a path pair using paper-accurate segment-based matching.
+    Uses perpendicular distance to segments for accurate width variance calculation.
     """
     left_path, right_path = path_pair
 
@@ -779,9 +925,9 @@ def compute_features(path_pair, points):
     num_left_points = len(left_path)  # feature 2
     num_right_points = len(right_path)  # feature 3
 
-    # Use improved matching for width calculation
-    matching_lines = find_matching_points(left_path, right_path, points)
-    widths = [match["width"] for match in matching_lines]
+    # Use paper-accurate segment matching for width calculation
+    matching_lines = find_matching_segments(left_path, right_path, points)
+    widths = [match["width"] for match in matching_lines]  # Perpendicular distances
     width_variance = np.var(widths) if widths else 0.0  # feature 4
 
     def compute_segment_variance(coords):
@@ -885,12 +1031,12 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
             label=f"Right {i+1}",
         )
 
-        # Plot matching lines
-        matching_lines = find_matching_points(left_path, right_path, points)
+        # Plot matching lines (using paper-accurate segment-based matching)
+        matching_lines = find_matching_segments(left_path, right_path, points)
         for match in matching_lines:
             plt.plot(
-                [match["left_point"][0], match["right_point"][0]],
-                [match["left_point"][1], match["right_point"][1]],
+                [match["left_point"][0], match["projection_point"][0]],
+                [match["left_point"][1], match["projection_point"][1]],
                 "--",
                 color=color,
                 alpha=0.5,
