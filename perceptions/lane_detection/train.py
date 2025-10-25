@@ -8,9 +8,9 @@ import torch.nn.functional as F
 from data_loader import *
 from model import *
 
-def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015):
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50):
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Add weight decay for L2 regularization
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -33,22 +33,20 @@ def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, l
         correct = 0
         total = 0
         
-        for left_tensor, right_tensor in train_dataloader:
-            batch_size = left_tensor.size(0)
+        for feat_pair, IoU_pair in train_dataloader:
+            features_1, features_2 = torch.unbind(feat_pair, dim=1)
+            IoU_1, IoU_2 = torch.unbind(IoU_pair, dim=1)
+            batch_size = feat_pair.size(0)
             optimizer.zero_grad()
             
-            # Create labels: 0 for left cones, 1 for right cones
-            labels_left = torch.zeros(batch_size, dtype=torch.long)
-            labels_right = torch.ones(batch_size, dtype=torch.long)
-            
             # Forward pass
-            left_pred = model(left_tensor)
-            right_pred = model(right_tensor)
+            pred_1 = model(features_1)
+            pred_2 = model(features_2)
             
             # Calculate loss
-            loss_left = criterion(left_pred, labels_left)
-            loss_right = criterion(right_pred, labels_right)
-            loss = loss_left + loss_right
+            p_gt = F.sigmoid(L * (IoU_1 - IoU_2))
+            p_pred = F.sigmoid(pred_1 - pred_2)
+            loss = criterion(p_pred, p_gt)
             
             # Backward pass
             loss.backward()
@@ -57,11 +55,10 @@ def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, l
             running_loss += loss.item()
             
             # Calculate accuracy
-            _, predicted_left = torch.max(left_pred.data, 1)
-            _, predicted_right = torch.max(right_pred.data, 1)
-            total += batch_size * 2
-            correct += (predicted_left == labels_left).sum().item()
-            correct += (predicted_right == labels_right).sum().item()
+            pred_classification  = pred_1 > pred_2
+            gt_classification = IoU_1 > IoU_2
+            total += batch_size
+            correct += (pred_classification == gt_classification).sum().item()
         
         epoch_loss = running_loss / len(train_dataloader)
         accuracy = 100 * correct / total
@@ -73,30 +70,27 @@ def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, l
         val_running_loss = 0.0
         
         with torch.no_grad():
-            for left_tensor, right_tensor in val_dataloader:
-                batch_size = left_tensor.size(0)
-
-                # Create labels
-                labels_left = torch.zeros(batch_size, dtype=torch.long)
-                labels_right = torch.ones(batch_size, dtype=torch.long)
-
-                # Get predictions
-                left_pred = model(left_tensor)
-                right_pred = model(right_tensor)
-
+            for feat_pair, IoU_pair in val_dataloader:
+                features_1, features_2 = torch.unbind(feat_pair, dim=1)
+                IoU_1, IoU_2 = torch.unbind(IoU_pair, dim=1)
+                batch_size = feat_pair.size(0)
+                
+                # Forward pass
+                pred_1 = model(features_1)
+                pred_2 = model(features_2)
+                
                 # Calculate loss
-                loss_left = criterion(left_pred, labels_left)
-                loss_right = criterion(right_pred, labels_right)
-                val_running_loss += (loss_left + loss_right).item()
+                p_gt = F.sigmoid(L * (IoU_1 - IoU_2))
+                p_pred = F.sigmoid(pred_1 - pred_2)
+                loss = criterion(p_pred, p_gt)
+                
+                val_running_loss += loss.item()
                 
                 # Calculate accuracy
-                _, predicted_left = torch.max(left_pred.data, 1)
-                _, predicted_right = torch.max(right_pred.data, 1)
-                
-                # Count correct predictions
-                val_total += batch_size * 2
-                val_correct += (predicted_left == labels_left).sum().item()
-                val_correct += (predicted_right == labels_right).sum().item()
+                pred_classification  = pred_1 > pred_2
+                gt_classification = IoU_1 > IoU_2
+                val_total += batch_size
+                val_correct += (pred_classification == gt_classification).sum().item()
         
         val_accuracy = 100 * val_correct / val_total
         val_loss = val_running_loss / len(val_dataloader)
@@ -155,34 +149,35 @@ def evaluate_model(model, dataset):
     total = 0
     
     with torch.no_grad():
-        for left_tensor, right_tensor in dataset:
-            if not isinstance(left_tensor, torch.Tensor):
-                left_tensor = torch.tensor(left_tensor, dtype=torch.float32)
-            if not isinstance(right_tensor, torch.Tensor):
-                right_tensor = torch.tensor(right_tensor, dtype=torch.float32)
+        for feat_pair, IoU_pair in dataset:
+            features_1, features_2 = torch.unbind(feat_pair, dim=1)
+            IoU_1, IoU_2 = torch.unbind(IoU_pair, dim=1)
+            # batch_size = feat_pair.size(0)
+            if not isinstance(features_1, torch.Tensor):
+                features_1 = torch.tensor(features_1, dtype=torch.float32)
+            if not isinstance(features_2, torch.Tensor):
+                features_2 = torch.tensor(features_2, dtype=torch.float32)
             
             # Get predictions
-            left_pred = model(left_tensor)
-            right_pred = model(right_tensor)
+            pred_1 = model(features_1)
+            pred_2 = model(features_2)
             
             # Calculate accuracy
-            _, predicted_left = torch.max(left_pred.data, 1)
-            _, predicted_right = torch.max(right_pred.data, 1)
-            
-            # Count correct predictions
-            total += 2  # Two predictions per sample
-            correct += (predicted_left == 0).sum().item()  # Should predict left (0)
-            correct += (predicted_right == 1).sum().item()  # Should predict right (1)
+
+            pred_classification  = pred_1 > pred_2
+            gt_classification = IoU_1 > IoU_2
+            total += 1 # one prediction per sample
+            correct += (pred_classification == gt_classification).sum().item()
     
     accuracy = 100 * correct / total
     print(f"Test Accuracy: {accuracy:.2f}%")
     
-    # Print confidence scores
-    print("\nConfidence Analysis:")
-    left_conf = torch.softmax(left_pred, dim=1)
-    right_conf = torch.softmax(right_pred, dim=1)
-    print(f"Average confidence for left cones: {left_conf[:, 0].mean():.4f}")
-    print(f"Average confidence for right cones: {right_conf[:, 1].mean():.4f}")
+    # # Print confidence scores
+    # print("\nConfidence Analysis:")
+    # conf_1 = torch.softmax(pred_1, dim=1)
+    # conf_2 = torch.softmax(pred_2, dim=1)
+    # print(f"Average confidence for left cones: {conf_1[:, 0].mean():.4f}")
+    # print(f"Average confidence for right cones: {conf_2[:, 1].mean():.4f}")
 
 def load_model(model_path='model.pth'):
     """Load a pre-trained model from file"""
@@ -258,12 +253,10 @@ def main(mode='train', model_path='model.pth'):
         torch.save({
             'model_state_dict': model.state_dict(),
             'final_config': {
-                'input_size': 2,
-                'conv1_channels': 16,
-                'conv2_channels': 32,
-                'pool_size': 16,
-                'fc1_size': 64,
-                'output_size': 2
+                'input_size': 8,
+                'fc1_size': 800,
+                'fc2_size': 100,
+                'output_size': 1
             }
         }, 'model.pth')
 
