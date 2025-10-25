@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
 import math
-import sys
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
@@ -81,7 +80,7 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
     boundary_filtered = []
     left_x, left_y = cone_map.get(left_point)
     closest_right_x , closest_right_y = None
-    min_dist_squared = sys.maxsize 
+    min_dist_squared = float("inf")
     
     # Find right boundary point closest to left point
     for right_point in right_boundary:
@@ -97,18 +96,15 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
     mid_y = (left_y + closest_right_y)/2
     
     # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
-    car_heading_deg = math.degrees(math.atan((left_y - closest_right_y) / (left_x - closest_right_x)))
+    car_heading_deg = math.degrees(math.atan2(left_y - closest_right_y, left_x - closest_right_x))
     CONE_ANGLE_DEG = 120.0
 
     # Ensures that direction car travels is standard
-    car_heading_diff = math.abs(prev_heading_deg - car_heading_deg)
-    if car_heading_deg <= 0 and math.abs(prev_heading_deg - (car_heading_deg + 180.0)) < car_heading_diff:
-        car_heading_deg += 180.0
-    elif car_heading_deg > 0 and math.abs(prev_heading_deg - (car_heading_deg - 180.0)) < car_heading_diff:
-        car_heading_deg -= 180.0
+    if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
+        car_heading_deg = (car_heading_deg + 180) % 360 
 
     # Store all points within the perceptual range 
-    for _, point in cone_map.items():
+    for point, _ in cone_map.items():
         x, y = cone_map.get(point)
         if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
             if (point in left_boundary) or (point in right_boundary):
@@ -117,18 +113,27 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
             
     return (all_filtered, boundary_filtered, (left_x, left_y), (closest_right_x, closest_right_y), car_heading_deg)
 
+def angle_diff(a, b):
+    return abs((a - b + 180) % 360 - 180)
+    
 def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
     """
     Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
     Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
     """
-    slope_deg = -math.degrees(math.atan((x - mid_x) / (y - mid_y)))
-    if x < 0 and y < 0:
-        slope_deg += 180.0
-    elif x > 0 and y < 0:
-        slope_deg -= 180.0
-    if slope_deg < car_heading_deg + cone_angle_deg / 2 and slope_deg > car_heading_deg - cone_angle_deg:
-        return True
+    vec_x = x - mid_x
+    vec_y = y - mid_y
+    
+    heading_rad = math.radians(car_heading_deg)
+    hx = -math.sin(heading_rad)   
+    hy = math.cos(heading_rad)
+
+    dot = vec_x * hx + vec_y * hy
+    
+    if dot > 0:
+        point_angle = -math.degrees(math.atan2(vec_x, vec_y))
+        if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
+            return True
     return False
 
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
