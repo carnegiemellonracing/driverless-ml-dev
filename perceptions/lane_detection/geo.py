@@ -563,7 +563,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
     if it > itmax:
         return [];
     left_last_point = paths[0][-1]
-    right_last_point = paths[0][-1]
+    right_last_point = paths[1][-1]
 
     left_adj = [v for v in graph[left_last_point] if v not in visited]
     right_adj = [v for v in graph[right_last_point] if v not in visited]
@@ -572,7 +572,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
     if(not left_adj and not right_adj and constraint_decider(paths, points)):
         #if can't go further, return current path.
         return [paths]
-    while(not left_adj or not right_adj):
+    while(left_adj or right_adj):
         if(not left_adj and right_adj):
             right_candidate = next_vertex_decider(paths[1], right_adj, points, heading_vector)
             visited.add(right_candidate)
@@ -588,7 +588,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
             visited.add(left_candidate) 
             paths[0].append(left_candidate)
             if bt_decider_v2(paths, points, 0):
-                result.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+                results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
             if constraint_decider(paths, points):
                 results.append(paths)
             visited.disgard(left_candidate)
@@ -605,7 +605,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
                     results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
                 if constraint_decider(paths, points):
                     results.append(paths)    
-                paths[0].pop
+                paths[0].pop()
                 visited.disgard(left_candidate)
             else:
                 paths[1].append(right_candidate)
@@ -758,9 +758,9 @@ def Cpoly_bt(path_pair, points, new_side):
                 return False
     return True
         
-def Cwidth_bt()
+def Cwidth_bt():
     #returns true when Cwidth is satisfied.
-    return true
+    return True
 
 def constraint_decider(path_pair, points):
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair, points)
