@@ -1,3 +1,7 @@
+perceptions/camera_pipeline/runs/run-nano/detect/
+perceptions/camera_pipeline/runs/run-small/detect/
+ml_data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
