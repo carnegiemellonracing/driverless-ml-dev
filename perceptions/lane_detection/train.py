@@ -8,12 +8,12 @@ import torch.nn.functional as F
 from data_loader import *
 from model import *
 
-def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50):
+def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50, optimizer_ = optim.Adam):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Add weight decay for L2 regularization
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     # Add learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
     criterion = nn.CrossEntropyLoss()
@@ -152,7 +152,8 @@ def evaluate_model(model, dataset):
         for feat_pair, IoU_pair in dataset:
             features_1, features_2 = torch.unbind(feat_pair, dim=1)
             IoU_1, IoU_2 = torch.unbind(IoU_pair, dim=1)
-            # batch_size = feat_pair.size(0)
+            batch_size = feat_pair.size(0)
+
             if not isinstance(features_1, torch.Tensor):
                 features_1 = torch.tensor(features_1, dtype=torch.float32)
             if not isinstance(features_2, torch.Tensor):
@@ -163,21 +164,13 @@ def evaluate_model(model, dataset):
             pred_2 = model(features_2)
             
             # Calculate accuracy
-
             pred_classification  = pred_1 > pred_2
             gt_classification = IoU_1 > IoU_2
-            total += 1 # one prediction per sample
+            total += batch_size
             correct += (pred_classification == gt_classification).sum().item()
     
     accuracy = 100 * correct / total
     print(f"Test Accuracy: {accuracy:.2f}%")
-    
-    # # Print confidence scores
-    # print("\nConfidence Analysis:")
-    # conf_1 = torch.softmax(pred_1, dim=1)
-    # conf_2 = torch.softmax(pred_2, dim=1)
-    # print(f"Average confidence for left cones: {conf_1[:, 0].mean():.4f}")
-    # print(f"Average confidence for right cones: {conf_2[:, 1].mean():.4f}")
 
 def load_model(model_path='model.pth'):
     """Load a pre-trained model from file"""
@@ -225,9 +218,6 @@ def main(mode='train', model_path='model.pth'):
     # Create train and validation datasets with augmentation for training
     train_dataset = LaneDetectionDataset([(full_dataset.data[i]) for i in train_indices], augment=True)
     val_dataset = LaneDetectionDataset([(full_dataset.data[i]) for i in val_indices], augment=False)  # No augmentation on validation
-
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False)
     
     if mode == 'eval':
         # Only evaluate existing model
@@ -240,7 +230,9 @@ def main(mode='train', model_path='model.pth'):
     else:
         # Train new model (default behavior)
         model = ConeClassifier()
-        train_model(train_dataset, val_dataset, model)
+        train_model(train_dataset, val_dataset, model,
+                    epochs = 250, batch_size = 128,
+                    learning_rate= 0.0015, L = 50)
         
         # Load the best model and evaluate
         print("Loading best model for final evaluation...")
