@@ -1,6 +1,8 @@
 from warnings import deprecated
+
 import numpy as np
 import matplotlib.pyplot as plt
+
 from angle_utils import calculate_segment_angle
 
 # Export list for clean imports
@@ -196,6 +198,7 @@ def constraint_decider(path_pair, debug=False):
         print(f"Cseg: {Cseg(path_pair)}")
         print(f"Cwidth: {Cwidth(path_pair)}")
         print(f"Cpoly: {Cpoly(path_pair)}")
+
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair)
 
 
@@ -351,22 +354,22 @@ def debug_bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
     result = bt_decider(path_pair, fixed_matches, wmin, wmax)
 
     print(f"BT Decider Analysis for path pair:")
-    print(f"  Left path: {path_pair[0]}")
-    print(f"  Right path: {path_pair[1]}")
-    print(f"  Decision: {'CONTINUE' if result['continue'] else 'STOP'}")
-    print(f"  Reason: {result['reason']}")
+    print(f" Left path: {path_pair[0]}")
+    print(f" Right path: {path_pair[1]}")
+    print(f" Decision: {'CONTINUE' if result['continue'] else 'STOP'}")
+    print(f" Reason: {result['reason']}")
 
     if result["violations"]:
-        print(f"  Violations found:")
+        print(f" Violations found:")
         for violation_type, violation_data in result["violations"]:
-            print(f"    - {violation_type}: {violation_data}")
+            print(f" - {violation_type}: {violation_data}")
     else:
-        print(f"  No violations found")
+        print(f" No violations found")
 
     return result
 
 
-@deprecated
+@deprecated("Use enumerate_path_pairsv2 instead")
 def enumerate_path_pairs(graph, sl, sr, itmax=100):
     """
     Enumerate path pairs with improved backtracking based on constraint violations.
@@ -497,7 +500,11 @@ def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=
 
 def left_right_decider(left_path, right_path, points):
     """
-    Left-Right-Decider (LRD): Choose which path to extend to keep them equally advanced.
+    Left-Right-Decider (LRD): Choose which path to extend based on angle difference.
+
+    According to the paper's Section V-B, this decider selects the path that results
+    in the smaller angle difference, promoting smoother lane detection and reducing
+    abrupt changes in direction.
 
     Args:
         left_path: Current left path (list of vertex indices)
@@ -511,28 +518,32 @@ def left_right_decider(left_path, right_path, points):
         # Extend both equally at start
         return "left" if len(left_path) <= len(right_path) else "right"
 
-    # Compute angle of last segment for each path
-    def get_last_segment_angle(path):
-        if len(path) < 2:
-            return 0.0
-        prev_point = np.array(points[path[-2]])
-        curr_point = np.array(points[path[-1]])
-        segment = curr_point - prev_point
-        return np.arctan2(segment[1], segment[0])
+    def get_path_angle(path):
+        """Get the angle of the path using the proper angle calculation from angle_utils."""
+        if len(path) < 3:
+            # For paths with less than 3 points, use simple direction vector
+            if len(path) < 2:
+                return 0.0
+            prev_point = np.array(points[path[-2]])
+            curr_point = np.array(points[path[-1]])
+            segment = curr_point - prev_point
+            return np.arctan2(segment[1], segment[0])
 
-    left_angle = get_last_segment_angle(left_path)
-    right_angle = get_last_segment_angle(right_path)
+        # Use the proper angle calculation for 3+ points
+        p1 = np.array(points[path[-3]])
+        p2 = np.array(points[path[-2]])
+        p3 = np.array(points[path[-1]])
 
-    # Compute distance from origin for each path
-    left_dist = np.linalg.norm(np.array(points[left_path[-1]]))
-    right_dist = np.linalg.norm(np.array(points[right_path[-1]]))
+        # Use the angle calculation from angle_utils
+        return calculate_segment_angle(p1, p2, p3)
 
-    # Extend the path that is less advanced (closer to origin)
-    if abs(left_dist - right_dist) > 0.5:  # If distance difference is significant
-        return "left" if left_dist < right_dist else "right"
+    # Get the current angles of both paths using proper angle calculation
+    left_angle = get_path_angle(left_path)
+    right_angle = get_path_angle(right_path)
 
-    # Otherwise, extend the path with smaller angle difference
-    return "left" if len(left_path) <= len(right_path) else "right"
+    # The paper's LR Decider: choose the path with smaller angle difference
+    # This promotes smoother lane progression by avoiding abrupt direction changes
+    return "left" if left_angle <= right_angle else "right"
 
 
 def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=None):
@@ -573,33 +584,103 @@ def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=No
                 solutions.append((left_path[:], right_path[:]))
             return
 
-        # Try extending paths
+        # Try extending paths using LR Decider to choose which path to extend
         if left_adj and right_adj:
-            # Use NVD to select best next vertices
-            left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
-            right_next = next_vertex_decider(
-                right_path, right_adj, points, heading_vector
-            )
+            # Use LR Decider to determine which path to extend first
+            lr_decision = left_right_decider(left_path, right_path, points)
 
-            if left_next is not None and right_next is not None:
-                # Try extending both paths
-                new_left = left_path + [left_next]
-                new_right = right_path + [right_next]
-                new_pair = (new_left, new_right)
+            if lr_decision == "left":
+                # Extend left path first
+                left_next = next_vertex_decider(
+                    left_path, left_adj, points, heading_vector
+                )
+                if left_next is not None:
+                    new_left = left_path + [left_next]
+                    new_pair = (new_left, right_path)
 
-                # Check constraints
-                if constraint_decider(new_pair):
-                    # Add to solutions
-                    solutions.append((new_left[:], new_right[:]))
+                    if constraint_decider(new_pair):
+                        solutions.append((new_left[:], right_path[:]))
+                        backtrack(
+                            new_left,
+                            right_path,
+                            visited_left | {left_next},
+                            visited_right,
+                            iteration + 1,
+                        )
 
-                    # Continue search
-                    backtrack(
-                        new_left,
-                        new_right,
-                        visited_left | {left_next},
-                        visited_right | {right_next},
-                        iteration + 1,
-                    )
+                # Then try extending right path
+                right_next = next_vertex_decider(
+                    right_path, right_adj, points, heading_vector
+                )
+                if right_next is not None:
+                    new_right = right_path + [right_next]
+                    new_pair = (left_path, new_right)
+
+                    if constraint_decider(new_pair):
+                        solutions.append((left_path[:], new_right[:]))
+                        backtrack(
+                            left_path,
+                            new_right,
+                            visited_left,
+                            visited_right | {right_next},
+                            iteration + 1,
+                        )
+
+            else:  # lr_decision == "right"
+                # Extend right path first
+                right_next = next_vertex_decider(
+                    right_path, right_adj, points, heading_vector
+                )
+                if right_next is not None:
+                    new_right = right_path + [right_next]
+                    new_pair = (left_path, new_right)
+
+                    if constraint_decider(new_pair):
+                        solutions.append((left_path[:], new_right[:]))
+                        backtrack(
+                            left_path,
+                            new_right,
+                            visited_left,
+                            visited_right | {right_next},
+                            iteration + 1,
+                        )
+
+                # Then try extending left path
+                left_next = next_vertex_decider(
+                    left_path, left_adj, points, heading_vector
+                )
+                if left_next is not None:
+                    new_left = left_path + [left_next]
+                    new_pair = (new_left, right_path)
+
+                    if constraint_decider(new_pair):
+                        solutions.append((new_left[:], right_path[:]))
+                        backtrack(
+                            new_left,
+                            right_path,
+                            visited_left | {left_next},
+                            visited_right,
+                            iteration + 1,
+                        )
+
+        # Also try extending both paths simultaneously (original behavior)
+        left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
+        right_next = next_vertex_decider(right_path, right_adj, points, heading_vector)
+
+        if left_next is not None and right_next is not None:
+            new_left = left_path + [left_next]
+            new_right = right_path + [right_next]
+            new_pair = (new_left, new_right)
+
+            if constraint_decider(new_pair):
+                solutions.append((new_left[:], new_right[:]))
+                backtrack(
+                    new_left,
+                    new_right,
+                    visited_left | {left_next},
+                    visited_right | {right_next},
+                    iteration + 1,
+                )
 
         elif left_adj:
             # Only left path can be extended
@@ -839,7 +920,8 @@ points = [
     (4, 9),
     (4, 12),
 ]  # Example set of 2D points
-# points = [(0, 0), (0, 3), (4, 0), (4, 3)]  # Example set of 2D points
+
+# points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
 dmax = 5
 adj_list = construct_adjacency_list(points, 4)
 print("Original points:", points)
@@ -849,7 +931,7 @@ print("Adjacency list:", adj_list)
 path_pairs = enumerate_path_pairs(adj_list, 0, 2)
 print(f"Found {len(path_pairs)} valid path pairs:")
 for i, pair in enumerate(path_pairs):
-    print(f"  Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
+    print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
 
 # Generate feature pairs
 feature_pairs = generate_feature_pairs(path_pairs, points)
