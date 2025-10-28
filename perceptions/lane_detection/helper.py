@@ -427,3 +427,76 @@ def OnlineLW(L, R, points, M_fixed_prev=None):
 
     # Line 9 of Algorithm 3: Return M_fixed and M_mut
     return M_fixed, M_mut
+
+def parametrize_position(fractional_index, chain, points):
+    """
+    Convert a fractional index to actual 2D coordinates on a polygonal chain.
+
+    Uses the parametrization formula from the paper:
+    P(i+λ) = (1-λ)p_i + λp_{i+1}
+
+    Args:
+        fractional_index: Float value where integer part is vertex index,
+                         fractional part is position along segment
+                         (e.g., 2.7 means 70% along segment from vertex 2 to 3)
+        chain: List of point indices forming the polygonal chain
+        points: List of [x, y] coordinates for all points
+
+    Returns:
+        numpy array [x, y] - coordinates at the fractional position
+    """
+    # Handle exact vertex positions
+    if fractional_index == int(fractional_index):
+        vertex_idx = int(fractional_index)
+        if vertex_idx >= len(chain):
+            vertex_idx = len(chain) - 1
+        return np.array(points[chain[vertex_idx]])
+
+    # Extract integer and fractional parts
+    i = int(fractional_index)
+    lambda_val = fractional_index - i
+
+    # Clamp to valid range
+    if i >= len(chain) - 1:
+        # At or beyond last vertex
+        return np.array(points[chain[-1]])
+
+    if i < 0:
+        # Before first vertex
+        return np.array(points[chain[0]])
+
+    # Linear interpolation: P(i+λ) = (1-λ)p_i + λp_{i+1}
+    p_i = np.array(points[chain[i]])
+    p_i_plus_1 = np.array(points[chain[i + 1]])
+
+    interpolated_point = (1 - lambda_val) * p_i + lambda_val * p_i_plus_1
+
+    return interpolated_point
+
+def matching_to_distance(u, v, L, R, points):
+    """
+    Convert fractional matching indices to Euclidean distance.
+
+    This implements the distance calculation from the paper:
+    w_i = ||L(u_i) - R(v_i)||_2
+
+    where L(u_i) and R(v_i) are obtained via parametrization.
+
+    Args:
+        u: Fractional index on left boundary L (e.g., 2.7 means 70% along segment [2,3])
+        v: Fractional index on right boundary R
+        L: List of point indices for left boundary
+        R: List of point indices for right boundary
+        points: List of [x, y] coordinates
+
+    Returns:
+        Float: Euclidean distance between L(u) and R(v)
+    """
+    # Get actual coordinates at fractional positions
+    left_point = parametrize_position(u, L, points)
+    right_point = parametrize_position(v, R, points)
+
+    # Compute Euclidean distance
+    distance = np.linalg.norm(left_point - right_point)
+
+    return distance

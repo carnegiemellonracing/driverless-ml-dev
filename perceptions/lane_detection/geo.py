@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 from angle_utils import calculate_segment_angle
 from helper import (
     point_to_segment_distance, point_to_polygonal_chain_distance,
-    segment_to_segment_distance, segment_to_polygonal_chain_distance)
+    segment_to_segment_distance, segment_to_polygonal_chain_distance,
+    OnlineLW, matching_to_distance)
 # Export list for clean imports
 __all__ = [
     "construct_adjacency_list",
