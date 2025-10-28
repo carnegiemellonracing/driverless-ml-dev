@@ -759,9 +759,56 @@ def Cpoly_bt(path_pair, points, new_side):
                 return False
     return True
         
-def Cwidth_bt():
-    #returns true when Cwidth is satisfied.
-    return True
+def Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, M_fixed_prev=None):
+    """
+    Width constraint for backtracking using OnlineLW algorithm (Lemma 3).
+
+    This implements the backtracking logic from the paper:
+    - Fixed matchings that violate width → Return False (must backtrack)
+    - Mutable matchings that violate width → Return True (may improve with extension)
+    - All matchings valid → Return True (continue searching)
+
+    Args:
+        path_pair: Tuple of (left_path, right_path) as lists of point indices
+        points: List of [x, y] coordinates for all points
+        wmin: Minimum lane width (default: 2.5m)
+        wmax: Maximum lane width (default: 6.5m)
+        M_fixed_prev: Fixed matching points from previous iteration (default: None)
+
+    Returns:
+        tuple: (should_continue: bool, M_fixed_new: list)
+            - should_continue: True if can continue search, False if must backtrack
+            - M_fixed_new: Updated fixed matching set for next iteration
+    """
+    left_path, right_path = path_pair
+
+    # Edge case: Need at least 1 point in each path to compute width
+    if len(left_path) < 1 or len(right_path) < 1:
+        return True, []
+
+    # Call OnlineLW to compute fixed and mutable matching sets
+    # This is the core of the incremental width calculation
+    M_fixed, M_mut = OnlineLW(left_path, right_path, points, M_fixed_prev)
+
+    # Check fixed matchings - these are "locked in" and won't change
+    # If any fixed matching violates width constraints, we MUST backtrack
+    for u, v in M_fixed:
+        width = matching_to_distance(u, v, left_path, right_path, points)
+
+        if not (wmin < width < wmax):
+            # Fixed matching violation - backtrack immediately (Lemma 3)
+            # This path cannot be salvaged by extending boundaries
+            return False, M_fixed
+
+    # All fixed matchings are valid!
+    # Even if mutable matchings violate constraints, we continue searching
+    # because they might improve as we extend the boundaries further
+
+    # Note: We don't check M_mut violations here because:
+    # 1. Mutable matchings near path endpoints may improve with extension
+    # 2. The paper's strategy is to only backtrack on irreversible violations
+
+    return True, M_fixed
 
 def constraint_decider(path_pair, points):
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair, points)
