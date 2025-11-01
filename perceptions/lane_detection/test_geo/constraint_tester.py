@@ -2,16 +2,16 @@ import os
 import sys
 
 import matplotlib.pyplot as plt
-import numpy as np
-import yaml
+import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from geo import (
-    bt_decider,
-    calculate_segment_angle,
-    constraint_decider,
+    find_matching_segments,
     find_matching_points,
+    constraint_decider,
+    bt_decider,
 )
+from angle_utils import calculate_segment_angle
 
 
 class ConstraintTester:
@@ -185,10 +185,13 @@ class ConstraintTester:
         return constraint_results
 
     def calculate_widths_for_track(self, track_id, wmin=2.5, wmax=6.5):
-        """Calculate widths for track using matching algorithm"""
+        """
+        Calculate widths for track using paper-accurate segment-based matching algorithm.
+        Uses perpendicular distance to segments instead of point-to-point distance.
+        """
         track = self.tracks[track_id - 1]
 
-        # Convert points to the format expected by find_matching_points
+        # Convert points to the format expected by find_matching_segments
         all_points = track["left_points"] + track["right_points"]
         left_indices = list(range(len(track["left_points"])))
         right_indices = list(
@@ -198,8 +201,8 @@ class ConstraintTester:
             )
         )
 
-        # Calculate matching lines and widths
-        matching_lines = find_matching_points(left_indices, right_indices, all_points)
+        # Calculate matching lines and widths using paper-accurate segment-based matching
+        matching_lines = find_matching_segments(left_indices, right_indices, all_points)
 
         width_analysis = {
             "track_id": track_id,
