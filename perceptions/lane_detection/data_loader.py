@@ -1,20 +1,26 @@
 import os
-import yaml
+import random
+
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
+import yaml
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
+import math
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
+
 # 1. Load the dataset (boundaries and cone maps)
 def load_yaml_data(path):
-    with open(path, 'r') as file:
+    with open(path, "r") as file:
         return yaml.load(file, Loader=yaml.FullLoader)
-    
+
+
 def pad_sequence(sequence, max_len):
     """
     Pad sequences to the maximum length in the batch.
@@ -23,26 +29,6 @@ def pad_sequence(sequence, max_len):
     padded_sequence = F.pad(sequence, (0, 0, 0, max_len - sequence.size(0)), value=0)
     return padded_sequence
 
-def collate_fn(batch):
-    """
-    Custom collate function to pad sequences in the batch to the same length.
-    """
-    left_tensors = [item[0] for item in batch]
-    right_tensors = [item[1] for item in batch]
-    
-    # Find the maximum length of the sequences
-    max_left_len = max([t.size(0) for t in left_tensors])
-    max_right_len = max([t.size(0) for t in right_tensors])
-    
-    # Pad all sequences to the same length
-    left_tensors = [pad_sequence(t, max_left_len) for t in left_tensors]
-    right_tensors = [pad_sequence(t, max_right_len) for t in right_tensors]
-    
-    # Stack the tensors into a single batch
-    left_tensor_batch = torch.stack(left_tensors, dim=0)
-    right_tensor_batch = torch.stack(right_tensors, dim=0)
-    
-    return left_tensor_batch, right_tensor_batch
 
 # Load all boundaries and cone maps
 boundary_paths = [f"{dataset_path}/boundaries_{i}.yaml" for i in range(1, 10)]
@@ -51,32 +37,90 @@ cone_map_paths = [f"{dataset_path}/cone_map_{i}.yaml" for i in range(1, 10)]
 boundaries = [load_yaml_data(path) for path in boundary_paths]
 cone_maps = [load_yaml_data(path) for path in cone_map_paths]
 
+
 # 2. Preprocess the data
-def generate_perceptual_field_data(boundaries, cone_maps, perceptual_range=30, noise_rate=0.1):
+def generate_perceptual_field_data(
+    boundaries, cone_maps, perceptual_range=30, noise_rate=0.1
+):
     perceptual_field_data = []
     for boundary, cone_map in zip(boundaries, cone_maps):
-        left_boundary = boundary['left']
-        right_boundary = boundary['right']
-        
-        # Filter out points outside perceptual range
-        filtered_left = filter_points_within_range(left_boundary, cone_map, perceptual_range)
-        filtered_right = filter_points_within_range(right_boundary, cone_map, perceptual_range)
-        
-        # Add noise for false positives
-        noisy_left = add_noise(filtered_left, noise_rate)
-        noisy_right = add_noise(filtered_right, noise_rate)
-        
-        perceptual_field_data.append((noisy_left, noisy_right))
-    
+        left_boundary = boundary["left"]
+        right_boundary = boundary["right"]
+
+        # Filter out points outside perceptual range. Generate a perceptual field using every left point
+        car_heading_deg = 0.0 # By convention - can change
+        for left_point in left_boundary:
+            filtered_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, car_heading_deg)
+            noisy_points = add_noise(filtered_points, noise_rate)
+            perceptual_field_data.append((noisy_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg))
+
     return perceptual_field_data
 
-def filter_points_within_range(boundary, cone_map, perceptual_range):
-    filtered = []
-    for point in boundary:
+def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, prev_heading_deg):
+    """
+    Returns:
+    - List of all points within a certain range defined on the midpoint of two left and right boundary points
+    - List of only boundary points that are filtered
+    """
+    all_filtered = []
+    boundary_filtered = []
+    left_x, left_y = cone_map.get(left_point)
+    closest_right_x , closest_right_y = None
+    min_dist_squared = float("inf")
+    
+    # Find right boundary point closest to left point
+    for right_point in right_boundary:
+        right_x, right_y = cone_map.get(right_point)
+        new_dist_squared = (right_x - left_x)**2 + (right_y - left_y)**2
+        if new_dist_squared < min_dist_squared:
+            closest_right_x = right_x
+            closest_right_y = right_y
+            min_dist_squared = new_dist_squared
+    
+    # Define the midpoint         
+    mid_x = (left_x + closest_right_x)/2
+    mid_y = (left_y + closest_right_y)/2
+    
+    # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
+    car_heading_deg = math.degrees(math.atan2(left_y - closest_right_y, left_x - closest_right_x))
+    CONE_ANGLE_DEG = 120.0
+
+    # Ensures that direction car travels is standard
+    if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
+        car_heading_deg = (car_heading_deg + 180) % 360 
+
+    # Store all points within the perceptual range 
+    for point, _ in cone_map.items():
         x, y = cone_map.get(point)
-        if x**2 + y**2 <= perceptual_range**2:  # Check if the point is within the perceptual range
-            filtered.append([x, y])
-    return filtered
+        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
+            if (point in left_boundary) or (point in right_boundary):
+                boundary_filtered.append([x, y]) 
+            all_filtered.append([x, y])
+            
+    return (all_filtered, boundary_filtered, (left_x, left_y), (closest_right_x, closest_right_y), car_heading_deg)
+
+def angle_diff(a, b):
+    return abs((a - b + 180) % 360 - 180)
+    
+def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
+    """
+    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
+    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
+    """
+    vec_x = x - mid_x
+    vec_y = y - mid_y
+    
+    heading_rad = math.radians(car_heading_deg)
+    hx = -math.sin(heading_rad)   
+    hy = math.cos(heading_rad)
+
+    dot = vec_x * hx + vec_y * hy
+    
+    if dot > 0:
+        point_angle = -math.degrees(math.atan2(vec_x, vec_y))
+        if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
+            return True
+    return False
 
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
     noisy_points = []
@@ -87,7 +131,7 @@ def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
             noisy_points.append([point[0] + noise[0], point[1] + noise[1]])
         else:
             noisy_points.append(point)
-            
+
     # Add pure false positives
     num_false_positives = int(len(points) * false_positive_rate)
     for _ in range(num_false_positives):
@@ -99,6 +143,7 @@ def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
         noisy_points.append([x, y])
 
     return noisy_points
+
 
 def augment_points(points, rotation_angle=15, scale_range=0.1, translation_range=1.0):
     points_arr = np.array(points)
@@ -118,7 +163,7 @@ def augment_points(points, rotation_angle=15, scale_range=0.1, translation_range
     # Translation
     translation = np.random.uniform(-translation_range, translation_range, size=2)
     points_arr = points_arr + translation
-    
+
     return points_arr.tolist()
 
 # ============================================================================
@@ -560,12 +605,12 @@ class LaneDetectionDataset(Dataset):
 
     def __getitem__(self, idx):
         noisy_left, noisy_right = self.data[idx]
-        
+
         if self.augment:
             # Augment both left and right boundaries together to maintain their spatial relationship
             combined = np.array(noisy_left + noisy_right)
             augmented_combined = augment_points(combined)
-            
+
             # Split them back
             len_left = len(noisy_left)
             noisy_left = augmented_combined[:len_left]
