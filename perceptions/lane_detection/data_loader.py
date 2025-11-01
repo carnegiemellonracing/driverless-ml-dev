@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
 import math
+from geo import enumerate_path_pairs_v2 as enumerate_valid_paths
+from geo import compute_features as compute_path_pair_features
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
@@ -199,72 +201,9 @@ def build_adjacency_graph(cone_map, dmax=5.0):
 
     return adjacency_list, points, cone_ids
 
-def enumerate_valid_paths(graph, points, left_start_idx, right_start_idx, itmax=2500, heading_vector=None):
-    """
-    Wrapper to enumerate valid path pairs using the correct Algorithm 2.
-
-    Args:
-        graph: Adjacency list from build_adjacency_graph()
-        points: List of [x, y] coordinates
-        left_start_idx: Starting vertex index for left boundary
-        right_start_idx: Starting vertex index for right boundary
-        itmax: Maximum iterations (default: 2500)
-        heading_vector: Initial heading direction [dx, dy] (optional)
-
-    Returns:
-        List of valid path pairs: [([left_path], [right_path]), ...]
-    """
-    # Import the correct enumeration function from geo.py
-    import sys
-    import importlib.util
-
-    # Load geo.py module
-    geo_path = f"{os.path.dirname(__file__)}/geo.py"
-    spec = importlib.util.spec_from_file_location("geo", geo_path)
-    geo = importlib.util.module_from_spec(spec)
-
-    # Set up global points variable for constraint_decider
-    geo.points = points
-
-    # Load the module
-    spec.loader.exec_module(geo)
-
-    # Call the correct enumeration function
-    path_pairs = geo.enumerate_path_pairs_v2(graph, points, left_start_idx, right_start_idx,
-                                             itmax=itmax, heading_vector=heading_vector)
-
-    return path_pairs
-
 # ============================================================================
 # PHASE 2: Fix Data Representation (ADDITIONS)
 # ============================================================================
-
-def compute_path_pair_features(path_pair, points):
-    """
-    Compute 8-dimensional feature vector for a path pair.
-
-    Uses the feature computation from geo.py.
-
-    Args:
-        path_pair: Tuple of (left_path, right_path) with vertex indices
-        points: List of [x, y] coordinates
-
-    Returns:
-        8-dimensional feature vector as list
-    """
-    import importlib.util
-
-    # Load geo.py module
-    geo_path = f"{os.path.dirname(__file__)}/geo.py"
-    spec = importlib.util.spec_from_file_location("geo", geo_path)
-    geo = importlib.util.module_from_spec(spec)
-    geo.points = points
-    spec.loader.exec_module(geo)
-
-    # Compute features using geo.py function
-    features = geo.compute_features(path_pair, points)
-
-    return features
 
 def rank_path_pairs(path_pairs, ground_truth_left, ground_truth_right, points):
     """
