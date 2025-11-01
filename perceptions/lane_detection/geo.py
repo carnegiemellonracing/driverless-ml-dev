@@ -4,7 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from angle_utils import calculate_segment_angle
-
+from helper import (
+    point_to_segment_distance, point_to_polygonal_chain_distance,
+    segment_to_segment_distance, segment_to_polygonal_chain_distance,
+    OnlineLW, matching_to_distance)
 # Export list for clean imports
 __all__ = [
     "point_to_segment_distance",
@@ -335,7 +338,7 @@ def constraint_decider(path_pair, debug=False):
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair)
 
 
-def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
+def bt_decider(path_pair, wmin=2.5, wmax=6.5):
     """
     Backtracking (BT) decider implementing the paper's sophisticated backtracking logic.
 
@@ -346,7 +349,6 @@ def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
 
     Args:
         path_pair: Tuple of (left_path, right_path) indices
-        fixed_matches: Set of (left_idx, right_idx) tuples that are fixed matches
         wmin, wmax: Width constraints for lane boundaries
 
     Returns:
@@ -355,10 +357,25 @@ def bt_decider(path_pair, fixed_matches=None, wmin=2.5, wmax=6.5):
         - 'reason': str - reason for the decision
         - 'violations': list - list of constraint violations found
     """
-    if fixed_matches is None:
-        fixed_matches = set()
+    #C_poly
+    segments = []
+    left_path = path_pair[0]
+    right_path = path_pair[1]
+    for i in range(len(left_path) - 1):
+        segments.append((left_path[i], left_path[i] + 1))
+    segments.append((left_path[-1], right_path[-1]))
+    for i in range(len(my_array) -1, 0, -1):
+        segments.append((right_path[i], right_path[i - 1]))
+    for i in segments:
+        for j in range(i):
+            p1, p2 = segments[i]
+            p3, p4 = segments[j]
+            if line_segments_intersect(p1, p2, p3, p4) and i != len(left_path) - 1 and j != len(right_path) - 1:
+                return True 
 
-    left_path, right_path = path_pair
+    # C_seg
+    
+    return False 
     violations = []
 
     # Check segment angle constraint (C_seg)
@@ -632,7 +649,7 @@ def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=
     return best_vertex
 
 
-def left_right_decider(left_path, right_path, points):
+def left_right_decider(left_path, right_path, points, left_candidate, right_candidate):
     """
     Left-Right-Decider (LRD): Choose which path to extend based on angle difference.
 
@@ -644,43 +661,31 @@ def left_right_decider(left_path, right_path, points):
         left_path: Current left path (list of vertex indices)
         right_path: Current right path (list of vertex indices)
         points: List of [x, y] coordinates
+        left_candidate: candidate for the left path
+        right_candidate: candidate for the right path
 
     Returns:
-        'left' or 'right' indicating which path to extend
+        0 for left, 1 for right
     """
-    if len(left_path) < 2 and len(right_path) < 2:
-        # Extend both equally at start
-        return "left" if len(left_path) <= len(right_path) else "right"
+    if len(left_path) < 1 and len(right_path) < 1:
+        return 0;
 
-    def get_path_angle(path):
-        """Get the angle of the path using the proper angle calculation from angle_utils."""
-        if len(path) < 3:
-            # For paths with less than 3 points, use simple direction vector
-            if len(path) < 2:
-                return 0.0
-            prev_point = np.array(points[path[-2]])
-            curr_point = np.array(points[path[-1]])
-            segment = curr_point - prev_point
-            return np.arctan2(segment[1], segment[0])
+    left_seg = points[left_candidate] - points[left_path[-1]]
+    right_seg = points[right_candidate] - points[right_path[-1]]
+    left_to_right_seg = points[left_candidate] - points[right_path[-1]]
+    right_to_left_seg = points[right_candidate] - points[left_path[-1]]
 
-        # Use the proper angle calculation for 3+ points
-        p1 = np.array(points[path[-3]])
-        p2 = np.array(points[path[-2]])
-        p3 = np.array(points[path[-1]])
+    def get_segment_angle(seg1, seg2):
+        return np.arctan2(seg2[1], seg2[0]) - np.arctan2(seg1[1], seg1[0])
 
-        # Use the angle calculation from angle_utils
-        return calculate_segment_angle(p1, p2, p3)
+    left_angle = get_segment_angle(left_seg, left_to_right_seg)
+    right_angle = get_segment_angle(right_seg, right_to_left_seg)
 
-    # Get the current angles of both paths using proper angle calculation
-    left_angle = get_path_angle(left_path)
-    right_angle = get_path_angle(right_path)
+    if abs(left_angle) < abs(right_angle):
+        return 0
+    return 1
 
-    # The paper's LR Decider: choose the path with smaller angle difference
-    # This promotes smoother lane progression by avoiding abrupt direction changes
-    return "left" if left_angle <= right_angle else "right"
-
-
-def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=None):
+def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, itmax=2500):
     """
     Correct implementation of Algorithm 2: Enumerate Path Pairs (EPP).
 
@@ -690,223 +695,267 @@ def enumerate_path_pairs_v2(graph, points, sl, sr, itmax=2500, heading_vector=No
     Args:
         graph: Adjacency list {vertex_idx: [adjacent_vertices]}
         points: List of [x, y] coordinates
-        sl: Starting vertex index for left path
-        sr: Starting vertex index for right path
+        visited: Set of visited vertices
+        it: Current iteration #
         itmax: Maximum iterations (default: 2500)
-        heading_vector: Initial heading direction [dx, dy] (optional)
 
     Returns:
         List of valid path pairs: [([left_path], [right_path]), ...]
     """
-    solutions = []
+    if it > itmax:
+        return [];
+    left_last_point = paths[0][-1]
+    right_last_point = paths[1][-1]
 
-    def backtrack(left_path, right_path, visited_left, visited_right, iteration):
-        nonlocal solutions
+    left_adj = [v for v in graph[left_last_point] if v not in visited]
+    right_adj = [v for v in graph[right_last_point] if v not in visited]
 
-        if iteration >= itmax:
-            return
+    results = [] 
+    if(not left_adj and not right_adj and constraint_decider(paths, points)):
+        #if can't go further, return current path.
+        return [paths]
+    while(left_adj or right_adj):
+        if(not left_adj and right_adj):
+            right_candidate = next_vertex_decider(paths[1], right_adj, points, heading_vector)
+            visited.add(right_candidate)
+            paths[1].append(right_candidate)
+            if bt_decider_v2(paths, points, 1):
+                results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+            if constraint_decider(paths, points):
+                results.append(paths)
+            visited.disgard(right_candidate)
+            paths[1].pop()
+        elif(left_adj and not right_adj):
+            left_candidate = next_vertex_decider(paths[0], left_adj, points, heading_vector)
+            visited.add(left_candidate) 
+            paths[0].append(left_candidate)
+            if bt_decider_v2(paths, points, 0):
+                results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+            if constraint_decider(paths, points):
+                results.append(paths)
+            visited.disgard(left_candidate)
+            paths[0].pop()
+        else:
+            left_candidate = next_vertex_decider(paths[0], left_adj, points, heading_vector)
+            visited.add(left_candidate)
+            right_candidate = next_vertex_decider(paths[1], right_adj, points, heading_vector)
+            visited.add(right_candidate)
+            if(left_right_decider(paths[0], paths[1], points, left_candidate, right_candidate) == 0):
+                paths[0].append(left_candidate)
+                visited.disgard(right_candidate)
+                if bt_decider_v2(paths, points, 0):
+                    results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+                if constraint_decider(paths, points):
+                    results.append(paths)    
+                paths[0].pop()
+                visited.disgard(left_candidate)
+            else:
+                paths[1].append(right_candidate)
+                visited.disgard(left_candidate)
+                if bt_decider_v2(paths, points, 1):
+                    results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+                if constraint_decider(paths, points):
+                    results.append(paths)
+                paths[1].pop()
+                visited.disgard(right_candidate)
 
-        # Get unvisited adjacent vertices
-        left_adj = [v for v in graph[left_path[-1]] if v not in visited_left]
-        right_adj = [v for v in graph[right_path[-1]] if v not in visited_right]
+    return results
 
-        # If no more vertices, this is a terminal path pair
-        if not left_adj and not right_adj:
-            if (
-                len(left_path) > 1 and len(right_path) > 1
-            ):  # Valid path has at least 2 vertices
-                solutions.append((left_path[:], right_path[:]))
-            return
+def Cseg(path_pair):
+    for i in range(len(path_pair[0]) - 2):
+        p1 = points[path_pair[0][i]]
+        p2 = points[path_pair[0][i + 1]]
+        p3 = points[path_pair[0][i + 2]]
 
-        # Try extending paths using LR Decider to choose which path to extend
-        if left_adj and right_adj:
-            # Use LR Decider to determine which path to extend first
-            lr_decision = left_right_decider(left_path, right_path, points)
+        angle = np.abs(
+            np.arctan2(p2[1] - p1[1], p2[0] - p1[0])
+            - np.arctan2(p3[1] - p2[1], p3[0] - p2[0])
+        )
 
-            if lr_decision == "left":
-                # Extend left path first
-                left_next = next_vertex_decider(
-                    left_path, left_adj, points, heading_vector
-                )
-                if left_next is not None:
-                    new_left = left_path + [left_next]
-                    new_pair = (new_left, right_path)
+        if angle > np.pi / 2:
+            return False
+    return True     
 
-                    if constraint_decider(new_pair):
-                        solutions.append((new_left[:], right_path[:]))
-                        backtrack(
-                            new_left,
-                            right_path,
-                            visited_left | {left_next},
-                            visited_right,
-                            iteration + 1,
-                        )
+def Cwidth(path_pair, wmin=2.5, wmax=6.5):
+    left_path, right_path = path_pair
 
-                # Then try extending right path
-                right_next = next_vertex_decider(
-                    right_path, right_adj, points, heading_vector
-                )
-                if right_next is not None:
-                    new_right = right_path + [right_next]
-                    new_pair = (left_path, new_right)
+    if len(left_path) < 1 or len(right_path) < 1:
+        return True
 
-                    if constraint_decider(new_pair):
-                        solutions.append((left_path[:], new_right[:]))
-                        backtrack(
-                            left_path,
-                            new_right,
-                            visited_left,
-                            visited_right | {right_next},
-                            iteration + 1,
-                        )
+    left_coords = np.array([points[i] for i in left_path])
+    right_coords = np.array([points[i] for i in right_path])
 
-            else:  # lr_decision == "right"
-                # Extend right path first
-                right_next = next_vertex_decider(
-                    right_path, right_adj, points, heading_vector
-                )
-                if right_next is not None:
-                    new_right = right_path + [right_next]
-                    new_pair = (left_path, new_right)
+    matching_widths = []
 
-                    if constraint_decider(new_pair):
-                        solutions.append((left_path[:], new_right[:]))
-                        backtrack(
-                            left_path,
-                            new_right,
-                            visited_left,
-                            visited_right | {right_next},
-                            iteration + 1,
-                        )
+    # M(L, R, 0, 0): Left vertices to right chain (nearest neighbor)
+    for left_vertex in left_coords:
+        dist = point_to_polygonal_chain_distance(left_vertex, right_coords)
+        matching_widths.append(dist)
+        
+    # M(L, R, 0, 1): Left segments to right chain
+    for i in range(len(left_coords) - 1):
+        seg_start = left_coords[i]
+        seg_end = left_coords[i + 1]
+        dist = segment_to_polygonal_chain_distance(seg_start, seg_end, right_coords)
+        matching_widths.append(dist)
+        
+    # M(L, R, 1, 0): Right vertices to left chain
+    for right_vertex in right_coords:
+        dist = point_to_polygonal_chain_distance(right_vertex, left_coords)
+        matching_widths.append(dist)
 
-                # Then try extending left path
-                left_next = next_vertex_decider(
-                    left_path, left_adj, points, heading_vector
-                )
-                if left_next is not None:
-                    new_left = left_path + [left_next]
-                    new_pair = (new_left, right_path)
+    # M(L, R, 1, 1): Right segments to left chain
+    for i in range(len(right_coords) - 1):
+        seg_start = right_coords[i]
+        seg_end = right_coords[i + 1]
+        dist = segment_to_polygonal_chain_distance(seg_start, seg_end, left_coords)
+        matching_widths.append(dist)
+        
+    for width in matching_widths:
+        if not (wmin < width < wmax):
+            return False
+    return True
 
-                    if constraint_decider(new_pair):
-                        solutions.append((new_left[:], right_path[:]))
-                        backtrack(
-                            new_left,
-                            right_path,
-                            visited_left | {left_next},
-                            visited_right,
-                            iteration + 1,
-                        )
+def Cpoly(path_pair, points, new_side = None):        
+    left_path, right_path = path_pair
+        
+    if len(left_path) == 0 and len(right_path) == 0:
+        return True
+    polygon_indices = list(left_path) + list(reversed(right_path))
+    polygon_points = [np.array(points[idx]) for idx in polygon_indices]
+    n = len(polygon_points)
 
-        # Also try extending both paths simultaneously (original behavior)
-        left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
-        right_next = next_vertex_decider(right_path, right_adj, points, heading_vector)
-
-        if left_next is not None and right_next is not None:
-            new_left = left_path + [left_next]
-            new_right = right_path + [right_next]
-            new_pair = (new_left, new_right)
-
-            if constraint_decider(new_pair):
-                solutions.append((new_left[:], new_right[:]))
-                backtrack(
-                    new_left,
-                    new_right,
-                    visited_left | {left_next},
-                    visited_right | {right_next},
-                    iteration + 1,
-                )
-
-        elif left_adj:
-            # Only left path can be extended
-            left_next = next_vertex_decider(left_path, left_adj, points, heading_vector)
-            if left_next is not None:
-                new_left = left_path + [left_next]
-                new_pair = (new_left, right_path)
-
-                if constraint_decider(new_pair):
-                    solutions.append((new_left[:], right_path[:]))
-                    backtrack(
-                        new_left,
-                        right_path,
-                        visited_left | {left_next},
-                        visited_right,
-                        iteration + 1,
-                    )
-
-        elif right_adj:
-            # Only right path can be extended
-            right_next = next_vertex_decider(
-                right_path, right_adj, points, heading_vector
-            )
-            if right_next is not None:
-                new_right = right_path + [right_next]
-                new_pair = (left_path, new_right)
-
-                if constraint_decider(new_pair):
-                    solutions.append((left_path[:], new_right[:]))
-                    backtrack(
-                        left_path,
-                        new_right,
-                        visited_left,
-                        visited_right | {right_next},
-                        iteration + 1,
-                    )
-
-    # Initialize heading vector if not provided (forward direction)
-    if heading_vector is None:
-        heading_vector = np.array([1.0, 0.0])
+    new_segment_indices = set()
+    if new_side == 0:
+        if len(right_path) == 0:
+            new_segment_indices.add(left_path[-2])
+            new_segment_indices.add(left_path[-1])
+        else:
+            new_segment_indices.add(left_path[-2])
+            new_segment_indices.add(left_path[-1])
+            new_segment_indices.add(right_path[-1])
+    elif new_side == 1:
+        if len(left_path) == 0:
+            new_segment_indices.add(right_path[-2])
+            new_segment_indices.add(right_path[-1])
+        else:
+            new_segment_indices.add(right_path[-2])
+            new_segment_indices.add(right_path[-1])
+            new_segment_indices.add(left_path[-1])
     else:
-        heading_vector = np.array(heading_vector)
-        heading_vector = heading_vector / (np.linalg.norm(heading_vector) + 1e-8)
+        new_segment_indices = polygon_indices
+    for i in new_segment_indices:
+        seg_start = polygon_points[i]
+        seg_end = polygon_points[i + 1]
+        for j in range(n):
+            if j == i:
+                continue
+            seg2_start = polygon_points[j]
+            seg2_end = polygon_points[(j + 1) % n]
 
-    # Start backtracking
-    backtrack([sl], [sr], {sl}, {sr}, 0)
-
-    return solutions
-
-
-def constraint_decider(path_pair):
-    """
-    Simplified constraint decider for basic path validation.
-    Updated to use paper-accurate segment-based width calculation.
-    """
-
-    def Cseg(path_pair):
-        for i in range(len(path_pair[0]) - 2):
-            p1 = points[path_pair[0][i]]
-            p2 = points[path_pair[0][i + 1]]
-            p3 = points[path_pair[0][i + 2]]
-
-            angle = np.abs(
-                np.arctan2(p2[1] - p1[1], p2[0] - p1[0])
-                - np.arctan2(p3[1] - p2[1], p3[0] - p2[0])
-            )
-
-            if angle > np.pi / 2:
+            if(line_segments_intersect(seg_start, seg_end, seg2_start, seg2_end)):
                 return False
+    return True
+
+def Cpoly_bt(path_pair, points, new_side):        
+    """
+    Returns true of Cpoly is satisfied and false if Cpoly is not satisfied
+    """
+    left_path, right_path = path_pair
+        
+    if len(left_path) == 0 and len(right_path) == 0:
         return True
+    polygon_indices = list(left_path) + list(reversed(right_path))
+    polygon_points = [np.array(points[idx]) for idx in polygon_indices]
+    n = len(polygon_points)
 
-    def Cwidth(path_pair, wmin=2.5, wmax=6.5):
-        """
-        Width constraint using paper-accurate perpendicular distance to segments.
-        """
-        left = path_pair[0]
-        right = path_pair[1]
+    new_segment_indices = set()
+    if new_side == 0:
+        if len(right_path) == 0:
+            new_segment_indices.add(left_path[-2])
+            new_segment_indices.add(left_path[-1])
+        else:
+            new_segment_indices.add(left_path[-2])
+            new_segment_indices.add(left_path[-1])
+            new_segment_indices.add(right_path[-1])
+    elif new_side == 1:
+        if len(left_path) == 0:
+            new_segment_indices.add(right_path[-2])
+            new_segment_indices.add(right_path[-1])
+        else:
+            new_segment_indices.add(right_path[-2])
+            new_segment_indices.add(right_path[-1])
+            new_segment_indices.add(left_path[-1])
+    for i in range(polygon_indices):
+        seg_start = polygon_points[i]
+        seg_end = polygon_points[i + 1]
+        for j in range(n):
+            if j == i or j in new_segment_indices and i in new_segment_indices:
+                #if the current segment is formed by the recently added vertex, skip
+                continue
+            seg2_start = polygon_points[j]
+            seg2_end = polygon_points[(j + 1) % n]
 
-        if len(left) < 2 or len(right) < 2:
-            return True  # Not enough points to check width
-
-        # Use segment-based matching for accurate width calculation
-        matching_lines = find_matching_segments(left, right, points)
-
-        for match in matching_lines:
-            width = match["width"]  # Perpendicular distance to segment
-            if not (wmin < width < wmax):
+            if(line_segments_intersect(seg_start, seg_end, seg2_start, seg2_end)):
                 return False
-        return True
+    return True
+        
+def Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, M_fixed_prev=None):
+    """
+    Width constraint for backtracking using OnlineLW algorithm (Lemma 3).
 
-    return Cseg(path_pair) and Cwidth(path_pair)
+    This implements the backtracking logic from the paper:
+    - Fixed matchings that violate width → Return False (must backtrack)
+    - Mutable matchings that violate width → Return True (may improve with extension)
+    - All matchings valid → Return True (continue searching)
 
+    Args:
+        path_pair: Tuple of (left_path, right_path) as lists of point indices
+        points: List of [x, y] coordinates for all points
+        wmin: Minimum lane width (default: 2.5m)
+        wmax: Maximum lane width (default: 6.5m)
+        M_fixed_prev: Fixed matching points from previous iteration (default: None)
+
+    Returns:
+        tuple: (should_continue: bool, M_fixed_new: list)
+            - should_continue: True if can continue search, False if must backtrack
+            - M_fixed_new: Updated fixed matching set for next iteration
+    """
+    left_path, right_path = path_pair
+
+    # Edge case: Need at least 1 point in each path to compute width
+    if len(left_path) < 1 or len(right_path) < 1:
+        return True, []
+
+    # Call OnlineLW to compute fixed and mutable matching sets
+    # This is the core of the incremental width calculation
+    M_fixed, M_mut = OnlineLW(left_path, right_path, points, M_fixed_prev)
+
+    # Check fixed matchings - these are "locked in" and won't change
+    # If any fixed matching violates width constraints, we MUST backtrack
+    for u, v in M_fixed:
+        width = matching_to_distance(u, v, left_path, right_path, points)
+
+        if not (wmin < width < wmax):
+            # Fixed matching violation - backtrack immediately (Lemma 3)
+            # This path cannot be salvaged by extending boundaries
+            return False, M_fixed
+
+    # All fixed matchings are valid!
+    # Even if mutable matchings violate constraints, we continue searching
+    # because they might improve as we extend the boundaries further
+
+    # Note: We don't check M_mut violations here because:
+    # 1. Mutable matchings near path endpoints may improve with extension
+    # 2. The paper's strategy is to only backtrack on irreversible violations
+
+    return True, M_fixed
+
+def constraint_decider(path_pair, points):
+    return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair, points)
+
+def bt_decider_v2(path_pair, points, new_side):
+    return Cwidth_bt(path_pair) and Cpoly_bt(path_pair, points, new_side) and Cseg(path_pair)
 
 def compute_features(path_pair, points):
     """
@@ -959,7 +1008,6 @@ def compute_features(path_pair, points):
 
     return feature_vector
 
-
 def generate_feature_pairs(path_pairs, points):
     feature_pairs = []
     for i in range(len(path_pairs)):
@@ -983,7 +1031,6 @@ def generate_feature_pairs(path_pairs, points):
                 print(f"Error processing path pairs {i} and {j}: {e}")
                 continue
     return feature_pairs
-
 
 def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     """
@@ -1051,7 +1098,6 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     plt.axis("equal")
     plt.tight_layout()
     plt.show()
-
 
 # Example usage:
 points = [
