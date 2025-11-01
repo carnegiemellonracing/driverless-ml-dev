@@ -2,6 +2,7 @@ from warnings import deprecated
 
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 from angle_utils import calculate_segment_angle
 
@@ -1052,37 +1053,62 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     plt.tight_layout()
     plt.show()
 
+def angle_diff(a, b):
+    return abs((a - b + 180) % 360 - 180)
+    
+def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
+    """
+    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
+    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
+    """
+    vec_x = x - mid_x
+    vec_y = y - mid_y
+    
+    heading_rad = math.radians(car_heading_deg)
+    hx = -math.sin(heading_rad)   
+    hy = math.cos(heading_rad)
 
-# Example usage:
-points = [
-    (0, 0),
-    (0, 3),
-    (0, 6),
-    (0, 9),
-    (0, 12),
-    (4, 0),
-    (4, 3),
-    (4, 6),
-    (4, 9),
-    (4, 12),
-]  # Example set of 2D points
+    dot = vec_x * hx + vec_y * hy
+    
+    if dot > 0:
+        point_angle = -math.degrees(math.atan2(vec_x, vec_y))
+        if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
+            return True
+    return False
 
-# points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
-dmax = 5
-adj_list = construct_adjacency_list(points, 4)
-print("Original points:", points)
-print("Adjacency list:", adj_list)
 
-# Find path pairs with improved constraints
-path_pairs = enumerate_path_pairs(adj_list, 0, 2)
-print(f"Found {len(path_pairs)} valid path pairs:")
-for i, pair in enumerate(path_pairs):
-    print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
+# # Example usage:
+# points = [
+#     (0, 0),
+#     (0, 3),
+#     (0, 6),
+#     (0, 9),
+#     (0, 12),
+#     (4, 0),
+#     (4, 3),
+#     (4, 6),
+#     (4, 9),
+#     (4, 12),
+# ]  # Example set of 2D points
 
-# Generate feature pairs
-feature_pairs = generate_feature_pairs(path_pairs, points)
-print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
+# # points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
+# dmax = 5
+# adj_list = construct_adjacency_list(points, 4)
+# print("Original points:", points)
+# print("Adjacency list:", adj_list)
 
-# Visualize results
-if path_pairs:
-    visualize_path_pairs(path_pairs, points, "Improved Lane Detection Results")
+# # Find path pairs with improved constraints
+# path_pairs = enumerate_path_pairs(adj_list, 0, 2)
+# print(f"Found {len(path_pairs)} valid path pairs:")
+# for i, pair in enumerate(path_pairs):
+#     print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
+
+# # Generate feature pairs
+# feature_pairs = generate_feature_pairs(path_pairs, points)
+# print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
+
+# # Visualize results
+# if path_pairs:
+#     visualize_path_pairs(path_pairs, points, "Improved Lane Detection Results")
+
+

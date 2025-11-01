@@ -11,6 +11,11 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 import random
 import torch.nn.functional as F
 import math
+from geo import (
+    angle_diff,
+    within_cone
+)
+from collections import deque
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
@@ -36,114 +41,6 @@ cone_map_paths = [f"{dataset_path}/cone_map_{i}.yaml" for i in range(1, 10)]
 
 boundaries = [load_yaml_data(path) for path in boundary_paths]
 cone_maps = [load_yaml_data(path) for path in cone_map_paths]
-
-
-# 2. Preprocess the data
-def generate_perceptual_field_data(
-    boundaries, cone_maps, perceptual_range=30, noise_rate=0.1
-):
-    perceptual_field_data = []
-    for boundary, cone_map in zip(boundaries, cone_maps):
-        left_boundary = boundary["left"]
-        right_boundary = boundary["right"]
-
-        # Filter out points outside perceptual range. Generate a perceptual field using every left point
-        car_heading_deg = 0.0 # By convention - can change
-        for left_point in left_boundary:
-            filtered_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, car_heading_deg)
-            noisy_points = add_noise(filtered_points, noise_rate)
-            perceptual_field_data.append((noisy_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg))
-
-    return perceptual_field_data
-
-def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, prev_heading_deg):
-    """
-    Returns:
-    - List of all points within a certain range defined on the midpoint of two left and right boundary points
-    - List of only boundary points that are filtered
-    """
-    all_filtered = []
-    boundary_filtered = []
-    left_x, left_y = cone_map.get(left_point)
-    closest_right_x , closest_right_y = None
-    min_dist_squared = float("inf")
-    
-    # Find right boundary point closest to left point
-    for right_point in right_boundary:
-        right_x, right_y = cone_map.get(right_point)
-        new_dist_squared = (right_x - left_x)**2 + (right_y - left_y)**2
-        if new_dist_squared < min_dist_squared:
-            closest_right_x = right_x
-            closest_right_y = right_y
-            min_dist_squared = new_dist_squared
-    
-    # Define the midpoint         
-    mid_x = (left_x + closest_right_x)/2
-    mid_y = (left_y + closest_right_y)/2
-    
-    # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
-    car_heading_deg = math.degrees(math.atan2(left_y - closest_right_y, left_x - closest_right_x))
-    CONE_ANGLE_DEG = 120.0
-
-    # Ensures that direction car travels is standard
-    if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
-        car_heading_deg = (car_heading_deg + 180) % 360 
-
-    # Store all points within the perceptual range 
-    for point, _ in cone_map.items():
-        x, y = cone_map.get(point)
-        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
-            if (point in left_boundary) or (point in right_boundary):
-                boundary_filtered.append([x, y]) 
-            all_filtered.append([x, y])
-            
-    return (all_filtered, boundary_filtered, (left_x, left_y), (closest_right_x, closest_right_y), car_heading_deg)
-
-def angle_diff(a, b):
-    return abs((a - b + 180) % 360 - 180)
-    
-def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
-    """
-    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
-    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
-    """
-    vec_x = x - mid_x
-    vec_y = y - mid_y
-    
-    heading_rad = math.radians(car_heading_deg)
-    hx = -math.sin(heading_rad)   
-    hy = math.cos(heading_rad)
-
-    dot = vec_x * hx + vec_y * hy
-    
-    if dot > 0:
-        point_angle = -math.degrees(math.atan2(vec_x, vec_y))
-        if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
-            return True
-    return False
-
-def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
-    noisy_points = []
-    for point in points:
-        if random.random() < noise_rate:
-            # Simulate a random false positive by adding noise to the point
-            noise = np.random.normal(0, 1, size=2)
-            noisy_points.append([point[0] + noise[0], point[1] + noise[1]])
-        else:
-            noisy_points.append(point)
-
-    # Add pure false positives
-    num_false_positives = int(len(points) * false_positive_rate)
-    for _ in range(num_false_positives):
-        # random point within perceptual range
-        r = perceptual_range * np.sqrt(random.random())
-        theta = random.random() * 2 * np.pi
-        x = r * np.cos(theta)
-        y = r * np.sin(theta)
-        noisy_points.append([x, y])
-
-    return noisy_points
-
 
 def augment_points(points, rotation_angle=15, scale_range=0.1, translation_range=1.0):
     points_arr = np.array(points)
@@ -505,72 +402,75 @@ def generate_pairwise_training_data(boundaries, cone_maps,
 
         # Step 1: Build adjacency graph from cone_map
         adjacency_list, points, cone_ids = build_adjacency_graph(cone_map, dmax=dmax)
+        true_adjacency_list, true_points, true_cone_ids = build_adjacency_graph(boundaries, dmax=dmax)
 
         # Step 2: Filter points within perceptual range and add noise
-        # Convert cone IDs to indices for filtering
+        # Convert cone IDs to indices for filtering - BOUNDARYYYY
         left_indices = find_starting_points(left_boundary, cone_ids)
         right_indices = find_starting_points(right_boundary, cone_ids)
 
-        # Add noise to points (simulate perception errors)
-        noisy_points = []
-        for point in points:
-            x, y = point
-            # Check if within range
-            if x**2 + y**2 <= perceptual_range**2:
-                # Add Gaussian noise
-                if random.random() < noise_rate:
-                    noise = np.random.normal(0, 0.3, size=2)  # 0.3m standard deviation
-                    noisy_points.append([x + noise[0], y + noise[1]])
-                else:
-                    noisy_points.append([x, y])
-            else:
-                noisy_points.append([x, y])
+        perceptual_fields = []
+        prev_heading_deg = 0.0 # By convention - can change
+        right_index = -1
+        min_dist = float('inf')
+        for left_index in left_indices:
+            # closest right index in adjacency graph
+            for index in adjacency_list[left_index]:
+                new_dist = np.linalg.norm(points[index])
+                if points[index] in right_boundary and new_dist < min_dist:
+                    min_dist = new_dist
+                    right_index = index
+            if right_index == -1:
+                continue
 
-        # Add false positives (10% of points)
-        num_false_positives = int(len(noisy_points) * 0.1)
-        for _ in range(num_false_positives):
-            r = perceptual_range * np.sqrt(random.random())
-            theta = random.random() * 2 * np.pi
-            x = r * np.cos(theta)
-            y = r * np.sin(theta)
-            noisy_points.append([x, y])
-            cone_ids.append(-1)  # Dummy cone ID for false positives
+            left_x, left_y = points[left_index] 
+            right_x, right_y = points[right_index] 
+            mid_x = (left_x + right_x)/2
+            mid_y = (left_y + right_y)/2
+            
+            car_heading_deg = math.degrees(math.atan2(left_y - right_y, left_x - right_x))
+            if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
+                car_heading_deg = (car_heading_deg + 180) % 360 
+            
+            CONE_DEG = 120
+            PERCEPTUAL_RANGE = 10 # TODO
+            subgraph = dfs_filter([mid_x, mid_y], car_heading_deg, CONE_DEG, PERCEPTUAL_RANGE, adjacency_list, points, start=0, condition_fn=filter_points_within_range)
+            true_subgraph = dfs_filter([mid_x, mid_y], car_heading_deg, CONE_DEG, PERCEPTUAL_RANGE, true_adjacency_list, true_points, start=0, condition_fn=filter_points_within_range) 
+            prev_heading_deg = car_heading_deg
+            
+            # TODO: decide if we want more noise on top of current data
 
-        # Rebuild adjacency graph with noisy points
-        adjacency_list, noisy_points_final, _ = build_adjacency_graph(
-            {i: noisy_points[i] for i in range(len(noisy_points))}, dmax=dmax
-        )
+            perceptual_fields.append((subgraph, true_subgraph, left_index, right_index, car_heading_deg))
 
-        # Step 3: Enumerate path pairs
-        # Use first cones from boundaries as starting points
-        if len(left_indices) == 0 or len(right_indices) == 0:
-            print(f"Warning: No starting points found for this sample, skipping...")
-            continue
-
-        left_start_idx = left_indices[0]
-        right_start_idx = right_indices[0]
-
+        # TODO: FIX EVERYTHING BELOW
         # Enumerate valid paths
-        path_pairs = enumerate_valid_paths(
-            adjacency_list, noisy_points_final,
-            left_start_idx, right_start_idx,
-            itmax=max_paths
-        )
+        for data in perceptual_fields:
+            subgraph = data[0]
+            true_subgraph = data[1]
+            left_index = data[2]
+            right_index = data[3]
+            car_heading_deg = data[4]
+            
+            path_pairs = enumerate_valid_paths(
+                subgraph, [points[key] for key in subgraph.keys()],
+                left_index, right_index,
+                itmax=max_paths
+            )
 
-        if len(path_pairs) == 0:
-            print(f"Warning: No valid path pairs found, skipping...")
-            continue
+            if len(path_pairs) == 0:
+                print(f"Warning: No valid path pairs found, skipping...")
+                continue
 
-        # Step 4: Rank path pairs against ground truth
-        ranked_pairs = rank_path_pairs(path_pairs, left_indices, right_indices, noisy_points_final)
+            # Step 4: Rank path pairs against ground truth
+            ranked_pairs = rank_path_pairs(path_pairs, left_indices, right_indices, noisy_points_final)
 
-        # Step 5: Create pairwise comparisons
-        pairwise_data = create_pairwise_comparisons(
-            ranked_pairs, noisy_points_final,
-            num_pairs_per_sample=num_comparisons_per_sample
-        )
+            # Step 5: Create pairwise comparisons
+            pairwise_data = create_pairwise_comparisons(
+                ranked_pairs, noisy_points_final,
+                num_pairs_per_sample=num_comparisons_per_sample
+            )
 
-        all_pairwise_data.extend(pairwise_data)
+            all_pairwise_data.extend(pairwise_data)
 
     # Return dataset
     if len(all_pairwise_data) == 0:
@@ -579,6 +479,40 @@ def generate_pairwise_training_data(boundaries, cone_maps,
 
     print(f"Generated {len(all_pairwise_data)} pairwise training samples")
     return PairwiseRankingDataset(all_pairwise_data, augment=False)
+
+
+def dfs_filter(midpt, heading_deg, cone_deg, perceptual_range, adjacency_list, points, start, condition_fn, visited=None):
+    if visited is None:
+        visited = {}
+
+    # If the node is already visited, skip
+    if start in visited:
+        return visited
+
+    # Initialize this node in the subgraph
+    visited[start] = []
+
+    for neighbor in adjacency_list[start]:
+        if condition_fn(midpt, neighbor, points, heading_deg, cone_deg, perceptual_range):
+            visited[start].append(neighbor)
+            if neighbor not in visited:
+                dfs_filter(adjacency_list, points, neighbor, condition_fn, visited)
+
+    return visited
+
+def filter_points_within_range(midpt, neighbor, points, heading_deg, cone_deg, perceptual_range):
+    """
+    Returns:
+    - List of all points within a certain range defined on the midpoint of two left and right boundary points
+    - List of only boundary points that are filtered
+    """
+    filtered = []
+    x, y = points[neighbor]
+    mid_x, mid_y = midpt
+    if (within_cone(x, y, mid_x, mid_y, heading_deg, cone_deg) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
+        filtered.append([x, y])
+            
+    return filtered
 
 def process_dataset_pairwise(boundaries_list, cone_maps_list, **kwargs):
     """
@@ -594,28 +528,3 @@ def process_dataset_pairwise(boundaries_list, cone_maps_list, **kwargs):
     """
     return generate_pairwise_training_data(boundaries_list, cone_maps_list, **kwargs)
 
-# 3. Create custom dataset class
-class LaneDetectionDataset(Dataset):
-    def __init__(self, perceptual_field_data, augment=False):
-        self.data = perceptual_field_data
-        self.augment = augment
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        noisy_left, noisy_right = self.data[idx]
-
-        if self.augment:
-            # Augment both left and right boundaries together to maintain their spatial relationship
-            combined = np.array(noisy_left + noisy_right)
-            augmented_combined = augment_points(combined)
-
-            # Split them back
-            len_left = len(noisy_left)
-            noisy_left = augmented_combined[:len_left]
-            noisy_right = augmented_combined[len_left:]
-
-        left_tensor = torch.tensor(noisy_left, dtype=torch.float32)
-        right_tensor = torch.tensor(noisy_right, dtype=torch.float32)
-        return left_tensor, right_tensor
