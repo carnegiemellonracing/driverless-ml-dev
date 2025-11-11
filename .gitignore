@@ -1,7 +1,9 @@
 perceptions/camera_pipeline/runs/run-nano/detect/
 perceptions/camera_pipeline/runs/run-small/detect/
 ml_data/
-
+runs/
+perceptions/camera_pipeline/notebooks/failed runs
+perceptions/camera_pipeline/notebooks/mlruns
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
