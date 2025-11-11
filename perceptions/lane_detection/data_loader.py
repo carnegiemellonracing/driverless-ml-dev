@@ -16,6 +16,7 @@ from geo import (
     within_cone
 )
 from collections import deque
+import random
 
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
@@ -367,7 +368,8 @@ def augment_path_pair_points(path_pair, points, rotation_angle=15, scale_range=0
 
 def generate_pairwise_training_data(boundaries, cone_maps,
                                    perceptual_range=30,
-                                   noise_rate=0.1,
+                                   perceptual_cone_deg=120,
+                                   noise_rate=0.1, 
                                    dmax=5.0,
                                    max_paths=50,
                                    num_comparisons_per_sample=5):
@@ -400,23 +402,24 @@ def generate_pairwise_training_data(boundaries, cone_maps,
         left_boundary = boundary['left']
         right_boundary = boundary['right']
 
-        # Step 1: Build adjacency graph from cone_map
+        # Build adjacency graph from cone_map
         adjacency_list, points, cone_ids = build_adjacency_graph(cone_map, dmax=dmax)
-        true_adjacency_list, true_points, true_cone_ids = build_adjacency_graph(boundaries, dmax=dmax)
 
-        # Step 2: Filter points within perceptual range and add noise
-        # Convert cone IDs to indices for filtering - BOUNDARYYYY
+        # Convert boundary cone IDs to indices for filtering
         left_indices = find_starting_points(left_boundary, cone_ids)
         right_indices = find_starting_points(right_boundary, cone_ids)
-
+        
         perceptual_fields = []
         prev_heading_deg = 0.0 # By convention - can change
         right_index = -1
         min_dist = float('inf')
+        
+        # Find closest right index
         for left_index in left_indices:
-            # closest right index in adjacency graph
-            for index in adjacency_list[left_index]:
-                new_dist = np.linalg.norm(points[index])
+            for index in adjacency_list[left_index]:   
+                left_x, left_y = points[left_index]
+                right_x, right_y = points[index]
+                new_dist = np.linalg.norm([left_x - right_x, left_y - right_y])
                 if points[index] in right_boundary and new_dist < min_dist:
                     min_dist = new_dist
                     right_index = index
@@ -425,32 +428,35 @@ def generate_pairwise_training_data(boundaries, cone_maps,
 
             left_x, left_y = points[left_index] 
             right_x, right_y = points[right_index] 
+            
+            # Define midpoint to be the car's position. TODO: introduce more variation (pick point bounded by 4 boundary points)
             mid_x = (left_x + right_x)/2
             mid_y = (left_y + right_y)/2
             
-            car_heading_deg = math.degrees(math.atan2(left_y - right_y, left_x - right_x))
+            # Choose the heading (+0 vs 180) most consistent with the heading of the previous perceptual field
+            deg_variation = 30.0
+            car_heading_deg = math.degrees(math.atan2(left_y - right_y, left_x - right_x)) + (random.random() * deg_variation)
             if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
                 car_heading_deg = (car_heading_deg + 180) % 360 
             
-            CONE_DEG = 120
-            PERCEPTUAL_RANGE = 10 # TODO
-            subgraph = dfs_filter([mid_x, mid_y], car_heading_deg, CONE_DEG, PERCEPTUAL_RANGE, adjacency_list, points, start=0, condition_fn=filter_points_within_range)
-            true_subgraph = dfs_filter([mid_x, mid_y], car_heading_deg, CONE_DEG, PERCEPTUAL_RANGE, true_adjacency_list, true_points, start=0, condition_fn=filter_points_within_range) 
+            # Use the adjacency list to efficiently filter out cones not in the prescribed range/cone
+            subgraph = dfs_filter([mid_x, mid_y], car_heading_deg, perceptual_cone_deg, perceptual_range, adjacency_list, points, start=0, condition_fn=filter_points_within_range)
+            sub_left_indices = [left_index for left_index in left_indices if left_index in subgraph.keys()]
+            sub_right_indices = [right_index for right_index in right_indices if right_index in subgraph.keys()]
             prev_heading_deg = car_heading_deg
             
             # TODO: decide if we want more noise on top of current data
+            perceptual_fields.append((subgraph, sub_left_indices, sub_right_indices, left_index, right_index, car_heading_deg))
 
-            perceptual_fields.append((subgraph, true_subgraph, left_index, right_index, car_heading_deg))
-
-        # TODO: FIX EVERYTHING BELOW
-        # Enumerate valid paths
         for data in perceptual_fields:
             subgraph = data[0]
-            true_subgraph = data[1]
-            left_index = data[2]
-            right_index = data[3]
-            car_heading_deg = data[4]
+            sub_left_indices = data[1]
+            sub_right_indices = data[2]
+            left_index = data[3]
+            right_index = data[4]
+            car_heading_deg = data[5]
             
+            # Enumerate valid paths
             path_pairs = enumerate_valid_paths(
                 subgraph, [points[key] for key in subgraph.keys()],
                 left_index, right_index,
@@ -462,11 +468,11 @@ def generate_pairwise_training_data(boundaries, cone_maps,
                 continue
 
             # Step 4: Rank path pairs against ground truth
-            ranked_pairs = rank_path_pairs(path_pairs, left_indices, right_indices, noisy_points_final)
+            ranked_pairs = rank_path_pairs(path_pairs, sub_left_indices, sub_right_indices, points)
 
             # Step 5: Create pairwise comparisons
             pairwise_data = create_pairwise_comparisons(
-                ranked_pairs, noisy_points_final,
+                ranked_pairs, points,
                 num_pairs_per_sample=num_comparisons_per_sample
             )
 
