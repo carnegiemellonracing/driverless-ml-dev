@@ -815,7 +815,8 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
                     results.append(enumerate_path_pairs_v2(graph, points, paths, 
                                                            visited, 
                                                            heading_vector, 
-                                                           it + 1, itmax))
+                                                           it + 1, M_fixed_new,
+                                                           itmax))
                 if constraint_decider(paths, points):
                     results.append(paths)    
                 paths[0].pop()
