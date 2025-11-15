@@ -1196,36 +1196,37 @@ def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
     plt.tight_layout()
     plt.show()
 
-# Example usage:
-points = [
-    (0, 0),
-    (0, 3),
-    (0, 6),
-    (0, 9),
-    (0, 12),
-    (4, 0),
-    (4, 3),
-    (4, 6),
-    (4, 9),
-    (4, 12),
-]  # Example set of 2D points
+if __name__ == "__main__":
+    # Example usage :
+    points = [
+        (0, 0),
+        (0, 3),
+        (0, 6),
+        (0, 9),
+        (0, 12),
+        (4, 0),
+        (4, 3),
+        (4, 6),
+        (4, 9),
+        (4, 12),
+    ]  # Example set of 2D points
 
-# points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
-dmax = 5
-adj_list = construct_adjacency_list(points, 4)
-print("Original points:", points)
-print("Adjacency list:", adj_list)
+    # points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
+    dmax = 5
+    adj_list = construct_adjacency_list(points, 4)
+    print("Original points:", points)
+    print("Adjacency list:", adj_list)
 
-# Find path pairs with improved constraints
-path_pairs = enumerate_path_pairs(adj_list, 0, 2)
-print(f"Found {len(path_pairs)} valid path pairs:")
-for i, pair in enumerate(path_pairs):
-    print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
+    # Find path pairs with improved constraints
+    path_pairs = enumerate_path_pairs(adj_list, 0, 2)
+    print(f"Found {len(path_pairs)} valid path pairs:")
+    for i, pair in enumerate(path_pairs):
+        print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
 
-# Generate feature pairs
-feature_pairs = generate_feature_pairs(path_pairs, points)
-print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
+    # Generate feature pairs
+    feature_pairs = generate_feature_pairs(path_pairs, points)
+    print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
 
-# Visualize results
-if path_pairs:
-    visualize_path_pairs(path_pairs, points, "Improved Lane Detection Results")
+    # Visualize results
+    if path_pairs:
+        visualize_path_pairs(path_pairs, points, "Improved Lane Detection Results")
