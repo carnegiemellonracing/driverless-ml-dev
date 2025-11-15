@@ -14,7 +14,7 @@ dataset_path = f"{os.path.dirname(__file__)}/dataset"
 # 1. Load the dataset (boundaries and cone maps)
 def load_yaml_data(path):
     with open(path, 'r') as file:
-        return yaml.load(file, Loader=yaml.FullLoader)
+        return yaml.load(file, Loader =yaml.FullLoader)
     
 def pad_sequence(sequence, max_len):
     """
@@ -139,14 +139,10 @@ def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
 def add_noise(points, noise_rate, perceptual_range=30, false_positive_rate=0.1):
     noisy_points = []
     for point in points:
-        if random.random() < noise_rate:
-            # Simulate a random false positive by adding noise to the point
-            noise = np.random.normal(0, 1, size=2)
-            noisy_points.append([point[0] + noise[0], point[1] + noise[1]])
-        else:
-            noisy_points.append(point)
+        noise = np.random.normal(0, 0.2, 2)#assume normal with 0.2 std dev
+        noisy_points.append([point[0] + noise[0], point[1] + noise[1]])
             
-    # Add pure false positives
+    # Add pure false positives for sake of testing
     num_false_positives = int(len(points) * false_positive_rate)
     for _ in range(num_false_positives):
         # random point within perceptual range
