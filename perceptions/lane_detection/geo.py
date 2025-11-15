@@ -218,13 +218,13 @@ def line_segments_intersect(p1, p2, p3, p4):
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 
-def constraint_decider(path_pair, debug=False):
+def constraint_decider(path_pair, points, M_fixed_prev=None, debug=False):
     """
     Constraint decider implementing the paper's geometric constraints.
     Includes segment angle, width, and polygon constraints with proper backtracking.
     """
 
-    def Cseg(path_pair):
+    def Cseg(path_pair, points):
         """
         Segment angle constraint - ensures path doesn't turn too sharply.
         Based on paper's C_seg constraint (Equation 11).
@@ -255,7 +255,7 @@ def constraint_decider(path_pair, debug=False):
 
         return True
 
-    def Cwidth(path_pair, wmin=2.5, wmax=6.5):
+    def Cwidth(path_pair, points, wmin=2.5, wmax=6.5):
         """
         Width constraint based on the paper's approach.
         Uses perpendicular distance to segments for accurate width calculation.
@@ -290,7 +290,7 @@ def constraint_decider(path_pair, debug=False):
 
         return True
 
-    def Cpoly(path_pair):
+    def Cpoly(path_pair, points):
         """
         Polygon constraint - ensures the lane forms a simple polygon.
         Based on the paper's polygon constraint (Equation 12).
@@ -330,12 +330,63 @@ def constraint_decider(path_pair, debug=False):
 
         return True
 
+    def Cwidth_v2(path_pair, points, wmin=2.5, wmax=6.5, M_fixed_prev=None):
+        """
+        Width constraint using OnlineLW algorithm for efficient matching computation.
+
+        This implements the paper's C_width constraint (Equation 10) using the OnlineLW
+        algorithm (Algorithm 3) to incrementally compute matching points between boundaries.
+
+        Unlike the original Cwidth, this version:
+        - Uses OnlineLW for incremental matching computation (avoids redundant recalculation)
+        - Maintains M_fixed state across iterations for performance
+        - Returns both constraint result AND updated M_fixed state
+
+        Args:
+            path_pair: Tuple of (left_path, right_path) as lists of point indices
+            points: List of [x, y] coordinates for all points
+            wmin: Minimum lane width (default: 2.5m)
+            wmax: Maximum lane width (default: 6.5m)
+            M_fixed_prev: Fixed matching points from previous iteration (default: None)
+
+        Returns:
+            tuple: (constraint_satisfied: bool, M_fixed_new: list)
+                - constraint_satisfied: True if all widths are within [wmin, wmax]
+                - M_fixed_new: Updated fixed matching set for next iteration
+        """
+        left_path, right_path = path_pair
+
+        # Edge case: Need at least 1 point in each path to compute width
+        if len(left_path) < 1 or len(right_path) < 1:
+            return True, []
+
+        # Call OnlineLW to compute fixed and mutable matching sets
+        # This is the core optimization - we only recompute mutable matchings
+        M_fixed, M_mut = OnlineLW(left_path, right_path, points, M_fixed_prev)
+
+        # Check ALL matchings (both fixed and mutable) for constraint violations
+        # We check both because even mutable matchings must satisfy constraints
+        all_matchings = M_fixed + M_mut
+
+        for u, v in all_matchings:
+            width = matching_to_distance(u, v, left_path, right_path, points)
+
+            if not (wmin < width < wmax):
+                # Width constraint violated
+                return False, M_fixed
+
+        # All matchings satisfy width constraints
+        return True, M_fixed
+
     if debug:
         print(f"Cseg: {Cseg(path_pair)}")
         print(f"Cwidth: {Cwidth(path_pair)}")
         print(f"Cpoly: {Cpoly(path_pair)}")
 
-    return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair)
+    CwidthSatisfied, M_fixed_new = Cwidth_v2(path_pair, points, 
+                                                 M_fixed_prev=M_fixed_prev)
+    return (Cseg(path_pair, points) and CwidthSatisfied and 
+            Cpoly(path_pair, points)), M_fixed_new
 
 
 def bt_decider(path_pair, wmin=2.5, wmax=6.5):
@@ -685,7 +736,8 @@ def left_right_decider(left_path, right_path, points, left_candidate, right_cand
         return 0
     return 1
 
-def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, itmax=2500):
+def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, 
+                            M_fixed_prev = None, itmax=2500):
     """
     Correct implementation of Algorithm 2: Enumerate Path Pairs (EPP).
 
@@ -711,40 +763,61 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
     right_adj = [v for v in graph[right_last_point] if v not in visited]
 
     results = [] 
-    if(not left_adj and not right_adj and constraint_decider(paths, points)):
+    if(not left_adj and not right_adj and constraint_decider(paths, points, 
+                                                             M_fixed_prev)):
         #if can't go further, return current path.
         return [paths]
     while(left_adj or right_adj):
         if(not left_adj and right_adj):
-            right_candidate = next_vertex_decider(paths[1], right_adj, points, heading_vector)
+            right_candidate = next_vertex_decider(paths[1], right_adj, points, 
+                                                  heading_vector)
             visited.add(right_candidate)
             paths[1].append(right_candidate)
-            if bt_decider_v2(paths, points, 1):
-                results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+            BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 1,
+                                                                 M_fixed_prev)
+            if BacktrackingResult:
+                results.append(enumerate_path_pairs_v2(graph, points, paths, 
+                                                       visited, heading_vector, 
+                                                       it + 1, M_fixed_new,
+                                                       itmax))
             if constraint_decider(paths, points):
                 results.append(paths)
             visited.disgard(right_candidate)
             paths[1].pop()
         elif(left_adj and not right_adj):
-            left_candidate = next_vertex_decider(paths[0], left_adj, points, heading_vector)
+            left_candidate = next_vertex_decider(paths[0], left_adj, points, 
+                                                 heading_vector)
             visited.add(left_candidate) 
             paths[0].append(left_candidate)
-            if bt_decider_v2(paths, points, 0):
-                results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+            BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 0,
+                                                            M_fixed_prev)
+            if BacktrackingResult:
+                results.append(enumerate_path_pairs_v2(graph, points, paths, 
+                                                       visited, heading_vector, 
+                                                       it + 1, M_fixed_new,
+                                                       itmax))
             if constraint_decider(paths, points):
                 results.append(paths)
             visited.disgard(left_candidate)
             paths[0].pop()
         else:
-            left_candidate = next_vertex_decider(paths[0], left_adj, points, heading_vector)
+            left_candidate = next_vertex_decider(paths[0], left_adj, points, 
+                                                 heading_vector)
             visited.add(left_candidate)
-            right_candidate = next_vertex_decider(paths[1], right_adj, points, heading_vector)
+            right_candidate = next_vertex_decider(paths[1], right_adj, points, 
+                                                  heading_vector)
             visited.add(right_candidate)
-            if(left_right_decider(paths[0], paths[1], points, left_candidate, right_candidate) == 0):
+            if(left_right_decider(paths[0], paths[1], points, left_candidate, 
+                                  right_candidate) == 0):
                 paths[0].append(left_candidate)
                 visited.disgard(right_candidate)
-                if bt_decider_v2(paths, points, 0):
-                    results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+                BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 0,
+                                                                M_fixed_prev)
+                if BacktrackingResult:
+                    results.append(enumerate_path_pairs_v2(graph, points, paths, 
+                                                           visited, 
+                                                           heading_vector, 
+                                                           it + 1, itmax))
                 if constraint_decider(paths, points):
                     results.append(paths)    
                 paths[0].pop()
@@ -752,8 +825,14 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, i
             else:
                 paths[1].append(right_candidate)
                 visited.disgard(left_candidate)
-                if bt_decider_v2(paths, points, 1):
-                    results.append(enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it + 1, itmax))
+                BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 1,
+                                                                M_fixed_prev)
+                if BacktrackingResult:
+                    results.append(enumerate_path_pairs_v2(graph, points, paths, 
+                                                           visited, 
+                                                           heading_vector, 
+                                                           it + 1, M_fixed_new,
+                                                           itmax))
                 if constraint_decider(paths, points):
                     results.append(paths)
                 paths[1].pop()
@@ -791,14 +870,14 @@ def Cwidth(path_pair, wmin=2.5, wmax=6.5):
     for left_vertex in left_coords:
         dist = point_to_polygonal_chain_distance(left_vertex, right_coords)
         matching_widths.append(dist)
-        
+
     # M(L, R, 0, 1): Left segments to right chain
     for i in range(len(left_coords) - 1):
         seg_start = left_coords[i]
         seg_end = left_coords[i + 1]
         dist = segment_to_polygonal_chain_distance(seg_start, seg_end, right_coords)
         matching_widths.append(dist)
-        
+
     # M(L, R, 1, 0): Right vertices to left chain
     for right_vertex in right_coords:
         dist = point_to_polygonal_chain_distance(right_vertex, left_coords)
@@ -810,11 +889,13 @@ def Cwidth(path_pair, wmin=2.5, wmax=6.5):
         seg_end = right_coords[i + 1]
         dist = segment_to_polygonal_chain_distance(seg_start, seg_end, left_coords)
         matching_widths.append(dist)
-        
+
     for width in matching_widths:
         if not (wmin < width < wmax):
             return False
     return True
+
+
 
 def Cpoly(path_pair, points, new_side = None):        
     left_path, right_path = path_pair
@@ -954,8 +1035,26 @@ def Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, M_fixed_prev=None):
 def constraint_decider(path_pair, points):
     return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair, points)
 
-def bt_decider_v2(path_pair, points, new_side):
-    return Cwidth_bt(path_pair) and Cpoly_bt(path_pair, points, new_side) and Cseg(path_pair)
+def bt_decider_v2(path_pair, points, new_side, M_fixed_prev=None):
+    width_ok, M_fixed_new = Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, 
+                                      M_fixed_prev=M_fixed_prev)
+    if not width_ok:
+        # Width constraint failed - must backtrack
+        # Return the M_fixed state even on failure for proper state tracking
+        return False, M_fixed_new
+    
+    # Check polygon constraint (no self-intersections)
+    if not Cpoly_bt(path_pair, points, new_side):
+        # Polygon constraint failed - must backtrack
+        return False, M_fixed_new
+    
+    # Check segment angle constraint (no sharp turns)
+    if not Cseg(path_pair):
+        # Segment angle constraint failed - must backtrack
+        return False, M_fixed_new
+    
+    # All constraints pass - continue searching
+    return True, M_fixed_new
 
 def compute_features(path_pair, points):
     """
