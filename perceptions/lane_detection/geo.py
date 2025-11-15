@@ -3,11 +3,10 @@ from warnings import deprecated
 import numpy as np
 import matplotlib.pyplot as plt
 
-from angle_utils import calculate_segment_angle
 from helper import (
     point_to_segment_distance, point_to_polygonal_chain_distance,
     segment_to_segment_distance, segment_to_polygonal_chain_distance,
-    OnlineLW, matching_to_distance)
+    OnlineLW, matching_to_distance, calculate_segment_angle)
 # Export list for clean imports
 __all__ = [
     "point_to_segment_distance",
@@ -389,8 +388,11 @@ def constraint_decider(path_pair, points, M_fixed_prev=None, debug=False):
             Cpoly(path_pair, points)), M_fixed_new
 
 
+@deprecated("Use bt_decider_v2 instead - this version has bugs")
 def bt_decider(path_pair, wmin=2.5, wmax=6.5):
     """
+    DEPRECATED: Use bt_decider_v2 instead.
+
     Backtracking (BT) decider implementing the paper's sophisticated backtracking logic.
 
     The BT decider analyzes constraint violations and determines whether to:
@@ -763,10 +765,6 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
     right_adj = [v for v in graph[right_last_point] if v not in visited]
 
     results = [] 
-    if(not left_adj and not right_adj and constraint_decider(paths, points, 
-                                                             M_fixed_prev)):
-        #if can't go further, return current path.
-        return [paths]
     while(left_adj or right_adj):
         if(not left_adj and right_adj):
             right_candidate = next_vertex_decider(paths[1], right_adj, points, 
@@ -782,7 +780,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
                                                        itmax))
             if constraint_decider(paths, points):
                 results.append(paths)
-            visited.disgard(right_candidate)
+            visited.discard(right_candidate)
             paths[1].pop()
         elif(left_adj and not right_adj):
             left_candidate = next_vertex_decider(paths[0], left_adj, points, 
@@ -798,7 +796,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
                                                        itmax))
             if constraint_decider(paths, points):
                 results.append(paths)
-            visited.disgard(left_candidate)
+            visited.discard(left_candidate)
             paths[0].pop()
         else:
             left_candidate = next_vertex_decider(paths[0], left_adj, points, 
@@ -810,7 +808,7 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
             if(left_right_decider(paths[0], paths[1], points, left_candidate, 
                                   right_candidate) == 0):
                 paths[0].append(left_candidate)
-                visited.disgard(right_candidate)
+                visited.discard(right_candidate)
                 BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 0,
                                                                 M_fixed_prev)
                 if BacktrackingResult:
@@ -821,10 +819,10 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
                 if constraint_decider(paths, points):
                     results.append(paths)    
                 paths[0].pop()
-                visited.disgard(left_candidate)
+                visited.discard(left_candidate)
             else:
                 paths[1].append(right_candidate)
-                visited.disgard(left_candidate)
+                visited.discard(left_candidate)
                 BacktrackingResult, M_fixed_new = bt_decider_v2(paths, points, 1,
                                                                 M_fixed_prev)
                 if BacktrackingResult:
@@ -836,11 +834,11 @@ def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it,
                 if constraint_decider(paths, points):
                     results.append(paths)
                 paths[1].pop()
-                visited.disgard(right_candidate)
+                visited.discard(right_candidate)
 
     return results
 
-def Cseg(path_pair):
+def Cseg(path_pair, points):
     for i in range(len(path_pair[0]) - 2):
         p1 = points[path_pair[0][i]]
         p2 = points[path_pair[0][i + 1]]
@@ -855,7 +853,7 @@ def Cseg(path_pair):
             return False
     return True     
 
-def Cwidth(path_pair, wmin=2.5, wmax=6.5):
+def Cwidth(path_pair, points, wmin=2.5, wmax=6.5):
     left_path, right_path = path_pair
 
     if len(left_path) < 1 or len(right_path) < 1:
@@ -1033,7 +1031,7 @@ def Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, M_fixed_prev=None):
     return True, M_fixed
 
 def constraint_decider(path_pair, points):
-    return Cseg(path_pair) and Cwidth(path_pair) and Cpoly(path_pair, points)
+    return Cseg(path_pair, points) and Cwidth(path_pair, points) and Cpoly(path_pair, points)
 
 def bt_decider_v2(path_pair, points, new_side, M_fixed_prev=None):
     width_ok, M_fixed_new = Cwidth_bt(path_pair, points, wmin=2.5, wmax=6.5, 
