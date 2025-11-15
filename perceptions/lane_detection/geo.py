@@ -417,7 +417,7 @@ def bt_decider(path_pair, wmin=2.5, wmax=6.5):
     for i in range(len(left_path) - 1):
         segments.append((left_path[i], left_path[i] + 1))
     segments.append((left_path[-1], right_path[-1]))
-    for i in range(len(my_array) -1, 0, -1):
+    for i in range(len(right_path) -1, 0, -1):
         segments.append((right_path[i], right_path[i - 1]))
     for i in segments:
         for j in range(i):
