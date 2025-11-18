@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import math
 from geo import enumerate_path_pairs_v2 as enumerate_valid_paths
 from geo import compute_features as compute_path_pair_features
-
+from geo import construct_adjacency_list
 dataset_path = f"{os.path.dirname(__file__)}/dataset"
 
 
@@ -42,32 +42,83 @@ cone_maps = [load_yaml_data(path) for path in cone_map_paths]
 
 # 2. Preprocess the data
 def generate_perceptual_field_data(
-    boundaries, cone_maps, perceptual_range=30, noise_rate=0.1
+    boundary, cone_map, perceptual_range=30, noise_rate=0.1, dmax=5
 ):
     perceptual_field_data = []
-    for boundary, cone_map in zip(boundaries, cone_maps):
-        left_boundary = boundary["left"]
-        right_boundary = boundary["right"]
+    # Build adjacency graph with cone_id mapping
+    adjacency_list, points, cone_ids = build_adjacency_graph(cone_map, dmax)
+    left_boundary = boundary["left"]
+    right_boundary = boundary["right"]
 
-        # Filter out points outside perceptual range. Generate a perceptual field using every left point
-        car_heading_deg = 0.0 # By convention - can change
-        for left_point in left_boundary:
-            filtered_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg = filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, car_heading_deg)
-            noisy_points = add_noise(filtered_points, noise_rate)
-            perceptual_field_data.append((noisy_points, filtered_boundary, left_starting_point, right_starting_point, car_heading_deg))
+    # Filter out points outside perceptual range. Generate a perceptual field using every left point
+    for left_point in left_boundary:
+        car_heading_deg, paths, subgraph, left_subset, right_subset = filter_points_within_range(
+            left_point, left_boundary, right_boundary, cone_map, perceptual_range, adjacency_list, cone_ids
+        )
+        # noisy_points = add_noise(subgraph, noise_rate)
+        perceptual_field_data.append((car_heading_deg, paths, subgraph, left_subset, right_subset))
 
     return perceptual_field_data
 
-def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, prev_heading_deg):
+def subgraph_add(subgraph, point, graph, cone_ids=None):
+    """
+    Add a point and its neighbors to the subgraph.
+    
+    Args:
+        subgraph: Current subgraph dict
+        point: Point to add (cone_id if cone_ids is provided, else index)
+        graph: Adjacency list (index-based or cone_id-based)
+        cone_ids: Optional list of cone IDs. If provided, graph is index-based and point is a cone_id
+        
+    Returns:
+        Updated subgraph
+    """
+    if cone_ids is not None:
+        # Index-based graph with cone_id point
+        cone_id_to_idx = {cone_id: idx for idx, cone_id in enumerate(cone_ids)}
+        if point not in cone_id_to_idx:
+            return subgraph
+        point_idx = cone_id_to_idx[point]
+        
+        subgraph[point] = []
+        if point_idx in graph:
+            for neighbor_idx in graph[point_idx]:
+                neighbor_cone_id = cone_ids[neighbor_idx]
+                if neighbor_cone_id in subgraph:
+                    subgraph[point].append(neighbor_cone_id)
+                    subgraph[neighbor_cone_id].append(point)
+    else:
+        # Cone_id-based graph
+        if point not in graph:
+            return subgraph
+        subgraph[point] = []
+        for n in graph[point]:
+            if n in subgraph:
+                subgraph[point].append(n)
+                subgraph[n].append(point)
+    
+    return subgraph
+            
+
+
+def filter_points_within_range(left_point, left_boundary, right_boundary, cone_map, perceptual_range, graph, cone_ids=None):
     """
     Returns:
     - List of all points within a certain range defined on the midpoint of two left and right boundary points
     - List of only boundary points that are filtered
+    
+    Args:
+        left_point: Cone ID of the left boundary point to use as reference
+        left_boundary: List of cone IDs that are left boundary
+        right_boundary: List of cone IDs that are right boundary
+        cone_map: Dict mapping cone_id to [x, y] coordinates
+        perceptual_range: Range in meters
+        graph: Adjacency list (dict with cone_id as keys, or index-based if cone_ids provided)
+        cone_ids: Optional list of cone IDs in order. If provided, graph uses indices; else uses cone_ids directly
     """
-    all_filtered = []
-    boundary_filtered = []
     left_x, left_y = cone_map.get(left_point)
-    closest_right_x , closest_right_y = None
+    closest_right_x, closest_right_y = None, None
+    closest_right = None
     min_dist_squared = float("inf")
     
     # Find right boundary point closest to left point
@@ -77,29 +128,38 @@ def filter_points_within_range(left_point, left_boundary, right_boundary, cone_m
         if new_dist_squared < min_dist_squared:
             closest_right_x = right_x
             closest_right_y = right_y
+            closest_right = right_point
             min_dist_squared = new_dist_squared
     
-    # Define the midpoint         
+    # Define the midpoint
     mid_x = (left_x + closest_right_x)/2
     mid_y = (left_y + closest_right_y)/2
     
     # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
-    car_heading_deg = math.degrees(math.atan2(left_y - closest_right_y, left_x - closest_right_x))
+    angle_noise = np.random.normal(loc=0.0, scale=10.0 * math.pi/180, size=None)
+    #Perpendicular so negative reciprocal
+    flip = np.random.choice([-1,1])
+    car_heading_deg = math.degrees(flip * math.atan2(left_x - closest_right_x, closest_right_y - left_y) + angle_noise)
     CONE_ANGLE_DEG = 120.0
 
-    # Ensures that direction car travels is standard
-    if angle_diff(prev_heading_deg, car_heading_deg + 180) < angle_diff(prev_heading_deg, car_heading_deg):
-        car_heading_deg = (car_heading_deg + 180) % 360 
+    # Create cone_id to index mapping if needed
+    if cone_ids is not None:
+        cone_id_to_idx = {cone_id: idx for idx, cone_id in enumerate(cone_ids)}
 
     # Store all points within the perceptual range 
+    subgraph = {left_point:[closest_right], closest_right: [left_point]}#force base points into subgraph
+    left_subset = []
+    right_subset = []
     for point, _ in cone_map.items():
         x, y = cone_map.get(point)
         if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
-            if (point in left_boundary) or (point in right_boundary):
-                boundary_filtered.append([x, y]) 
-            all_filtered.append([x, y])
-            
-    return (all_filtered, boundary_filtered, (left_x, left_y), (closest_right_x, closest_right_y), car_heading_deg)
+            if point in left_boundary:
+                left_subset.append(point)
+            if point in right_boundary:
+                right_subset.append(point)
+            subgraph = subgraph_add(subgraph, point, graph)
+
+    return (car_heading_deg, [[left_point], [closest_right]], subgraph, left_subset, right_subset)
 
 def angle_diff(a, b):
     return abs((a - b + 180) % 360 - 180)
@@ -113,13 +173,13 @@ def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
     vec_y = y - mid_y
     
     heading_rad = math.radians(car_heading_deg)
-    hx = -math.sin(heading_rad)   
-    hy = math.cos(heading_rad)
+    hx = math.cos(heading_rad)   
+    hy = math.sin(heading_rad)
 
     dot = vec_x * hx + vec_y * hy
     
     if dot > 0:
-        point_angle = -math.degrees(math.atan2(vec_x, vec_y))
+        point_angle = math.degrees(math.atan2(vec_y, vec_x))
         if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
             return True
     return False
@@ -205,53 +265,6 @@ def build_adjacency_graph(cone_map, dmax=5.0):
 # PHASE 2: Fix Data Representation (ADDITIONS)
 # ============================================================================
 
-def rank_path_pairs(path_pairs, ground_truth_left, ground_truth_right, points):
-    """
-    Rank path pairs by comparing to ground truth boundaries.
-
-    Args:
-        path_pairs: List of (left_path, right_path) tuples
-        ground_truth_left: List of cone indices for true left boundary
-        ground_truth_right: List of cone indices for true right boundary
-        points: List of [x, y] coordinates
-
-    Returns:
-        List of (path_pair, score) tuples, sorted by score (best first)
-    """
-    scores = []
-
-    for path_pair in path_pairs:
-        left_path, right_path = path_pair
-
-        # Score based on overlap with ground truth
-        left_overlap = len(set(left_path) & set(ground_truth_left))
-        right_overlap = len(set(right_path) & set(ground_truth_right))
-
-        # Normalize by path length
-        left_precision = left_overlap / len(left_path) if len(left_path) > 0 else 0
-        right_precision = right_overlap / len(right_path) if len(right_path) > 0 else 0
-
-        # Normalize by ground truth length (recall)
-        left_recall = left_overlap / len(ground_truth_left) if len(ground_truth_left) > 0 else 0
-        right_recall = right_overlap / len(ground_truth_right) if len(ground_truth_right) > 0 else 0
-
-        # F1 score for left and right
-        left_f1 = 2 * (left_precision * left_recall) / (left_precision + left_recall + 1e-8)
-        right_f1 = 2 * (right_precision * right_recall) / (right_precision + right_recall + 1e-8)
-
-        # Combined score (average F1)
-        score = (left_f1 + right_f1) / 2
-
-        # Bonus for longer paths (more complete detection)
-        length_bonus = (len(left_path) + len(right_path)) / 100.0
-
-        total_score = score + length_bonus
-        scores.append((path_pair, total_score))
-
-    # Sort by score (descending)
-    ranked = sorted(scores, key=lambda x: x[1], reverse=True)
-
-    return ranked
 
 def create_pairwise_comparisons(ranked_path_pairs, points, num_pairs_per_sample=5):
     """

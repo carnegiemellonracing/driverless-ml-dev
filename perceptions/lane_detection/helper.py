@@ -500,3 +500,37 @@ def matching_to_distance(u, v, L, R, points):
     distance = np.linalg.norm(left_point - right_point)
 
     return distance
+
+def calculate_segment_angle(p1, p2, p3):
+    """
+    Calculate angle between consecutive segments (p1->p2) and (p2->p3).
+    
+    Returns angle in radians [0, π].
+    Used in C_seg constraint to detect sharp turns.
+    
+    Args:
+        p1, p2, p3: Points as arrays or lists [x, y]
+    
+    Returns:
+        Angle in radians between the two segments
+    """
+    p1 = np.array(p1)
+    p2 = np.array(p2)
+    p3 = np.array(p3)
+    
+    # Vectors for the two segments
+    vec1 = p2 - p1
+    vec2 = p3 - p2
+    
+    # Calculate angles using arctan2
+    angle1 = np.arctan2(vec1[1], vec1[0])
+    angle2 = np.arctan2(vec2[1], vec2[0])
+    
+    # Angle difference
+    angle_diff = np.abs(angle2 - angle1)
+    
+    # Normalize to [0, π]
+    if angle_diff > np.pi:
+        angle_diff = 2 * np.pi - angle_diff
+    
+    return angle_diff
