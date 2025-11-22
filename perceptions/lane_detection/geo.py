@@ -3,6 +3,9 @@ from typing import List, Tuple
 from models import Point, Lane
 
 
+"""
+UTILS
+"""
 def get_segment_angle(p1: Point, p2: Point, p3: Point) -> float:
     """Calculates the absolute deflection angle between two consecutive segments.
 
@@ -72,6 +75,66 @@ def point_to_segment_distance(p: Point, s1: Point, s2: Point) -> Tuple[float, fl
     
     return distance, t
 
+def segment_to_segment_distance(s1_start: Point, s1_end: Point, 
+                                s2_start: Point, s2_end: Point) -> Tuple[float, float, float]:
+    """Calculates the shortest distance between two segments.
+    
+    Returns:
+        (distance, t1, t2): 
+        - distance: Euclidean distance
+        - t1: param on segment 1 [0, 1]
+        - t2: param on segment 2 [0, 1]
+    """
+    # 1. Check for intersection (Distance = 0)
+    if segments_intersect(s1_start, s1_end, s2_start, s2_end):
+        pass 
+
+    # 2. If no intersection, the closest pair MUST involve at least one endpoint.
+    # We test all 4 endpoint-to-segment projections.
+    
+    # s1 start to s2
+    d1, t_s2_1 = point_to_segment_distance(s1_start, s2_start, s2_end)
+    # s1 end to s2
+    d2, t_s2_2 = point_to_segment_distance(s1_end, s2_start, s2_end)
+    
+    # s2 start to s1
+    d3, t_s1_1 = point_to_segment_distance(s2_start, s1_start, s1_end)
+    # s2 end to s1
+    d4, t_s1_2 = point_to_segment_distance(s2_end, s1_start, s1_end)
+
+    # Find minimum
+    min_d = min(d1, d2, d3, d4)
+    
+    if min_d == d1:
+        return d1, 0.0, t_s2_1
+    elif min_d == d2:
+        return d2, 1.0, t_s2_2
+    elif min_d == d3:
+        return d3, t_s1_1, 0.0
+    else:
+        return d4, t_s1_2, 1.0
+
+def get_point_at_param(lane: Lane, t: float) -> Point:
+    """Interpolates a point on the lane at parameter t (Eq 7/8)."""
+    i = int(np.floor(t))
+    lam = t - i
+    
+    # Clamp to end
+    if i >= len(lane) - 1:
+        return lane[-1]
+        
+    p_i = lane[i]
+    p_next = lane[i+1]
+    
+    # P(i + lambda) = (1 - lambda)p_i + lambda * p_next
+    return (1.0 - lam) * p_i + lam * p_next
+
+
+
+"""
+MAIN FUNCTIONS
+"""
+
 def C_seg(boundary: Lane, max_angle: float = 90.0) -> bool:
     """Verifies the Segment Consistency constraint (C_seg).
 
@@ -137,4 +200,5 @@ def C_poly(left: Lane, right: Lane) -> bool:
                 return False
                 
     return True
+
 
