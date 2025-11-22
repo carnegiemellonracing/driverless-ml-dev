@@ -3,6 +3,7 @@ import yaml
 import numpy as np
 import math
 from typing import Dict, List
+from geo import within_range, within_cone 
 """
 Reading from the dataset
 
@@ -56,30 +57,6 @@ def build_adjacency_graph(cone_map, dmax=5.0):
     return adjacency_list, points, cone_ids
 
 
-def angle_diff(a, b):
-    return abs((a - b + 180) % 360 - 180)
-
-def within_cone(x, y, mid_x, mid_y, car_heading_deg, cone_angle_deg):
-    """
-    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
-    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
-    """
-    vec_x = x - mid_x
-    vec_y = y - mid_y
-    
-    heading_rad = math.radians(car_heading_deg)
-    hx = math.cos(heading_rad)   
-    hy = math.sin(heading_rad)
-
-    dot = vec_x * hx + vec_y * hy
-    
-    if dot > 0:
-        point_angle = math.degrees(math.atan2(vec_y, vec_x))
-        if angle_diff(point_angle, car_heading_deg) <= cone_angle_deg / 2:
-            return True
-    return False
-
-
 def subgraph_add(subgraph, point, graph):
     """
     Add a point and its neighbors to the subgraph.
@@ -105,9 +82,9 @@ def subgraph_add(subgraph, point, graph):
     return subgraph
 
 
-def filter_points_within_range(car_pos: np.array, car_heading: float,
+def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
                                 cone_map: Dict[int, np.ndarray], graph: Dict[int, List[int]],
-                                perceptual_range: float, CONE_ANGLE_DEG:float = 120.0):
+                                perceptual_range: float, cone_angle_rad:float = 120.0):
     """
     Returns:
     - Subgraph perceptual field
@@ -120,47 +97,34 @@ def filter_points_within_range(car_pos: np.array, car_heading: float,
         perceptual_range: Range in meters
         graph: Adjacency list
     """
-    mid_x, mid_y = car_pos
-    car_heading_deg = math.degrees(car_heading)
-
     # Store all points within the perceptual range 
     subgraph = {}
-    for point, _ in cone_map.items():
-        x, y = cone_map.get(point)
-        if (within_cone(x, y, mid_x, mid_y, car_heading_deg, CONE_ANGLE_DEG) and
-             (x - mid_x)**2 + (y - mid_y)**2 <= perceptual_range**2): 
-            subgraph = subgraph_add(subgraph, point, graph)
+    for id, point in cone_map.items():
+        if (within_range(point, car_pos, perceptual_range) and within_cone(point, car_pos, car_heading_rad, cone_angle_rad)): 
+            subgraph = subgraph_add(subgraph, id, graph)
 
     return subgraph
 
-
-def get_car_pos(left_point, right_boundary, cone_map):
-    left_x, left_y = cone_map.get(left_point)
-    closest_right_x, closest_right_y = None, None
-    closest_right = None
-    min_dist_squared = float("inf")
+def get_car_pos(left_id, right_boundary, cone_map):
+    min_dist = float('inf')
+    closest_right_pt = []
+    left_pt = cone_map.get(left_id)
     
-    # Find right boundary point closest to left point
-    for right_point in right_boundary:
-        right_x, right_y = cone_map.get(right_point)
-        new_dist_squared = (right_x - left_x)**2 + (right_y - left_y)**2
-        if new_dist_squared < min_dist_squared:
-            closest_right_x = right_x
-            closest_right_y = right_y
-            closest_right = right_point
-            min_dist_squared = new_dist_squared
-    
-    # Define the midpoint
-    mid_x = (left_x + closest_right_x)/2
-    mid_y = (left_y + closest_right_y)/2
+    for id in right_boundary:
+        point = cone_map.get(id)
+        dist = np.linalg.norm(left_pt - point)
+        if dist < min_dist:
+            min_dist = dist
+            closest_right_pt = point
+            
+    midpt = left_pt + closest_right_pt / 2
 
-    # Angle convention in line with article - 0 is vertical axis, pos angle to left, neg angle to right
-    angle_noise = np.random.normal(loc=0.0, scale=10.0 * math.pi/180, size=None)
+    angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None)
     #Perpendicular so negative reciprocal
     flip = np.random.choice([-1,1])
-    car_heading_rad = flip * math.atan2(left_x - closest_right_x, closest_right_y - left_y) + angle_noise
-    return (mid_x, mid_y), car_heading_rad
-
+    car_heading_rad = flip * math.atan2(
+        left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1]) + angle_noise
+    return midpt, car_heading_rad
 
 def generate_perceptual_field_data(
     boundary, cone_map, perceptual_range=30, dmax=5
@@ -172,10 +136,10 @@ def generate_perceptual_field_data(
     right_boundary = boundary["right"]
 
     # Filter out points outside perceptual range. Generate a perceptual field using every left point
-    for left_point in left_boundary:
-        car_pos, car_heading_rad = get_car_pos(left_point, right_boundary, cone_map)
+    for left_id in left_boundary:
+        car_pos, car_heading_rad = get_car_pos(left_id, right_boundary, cone_map)
         subgraph = filter_points_within_range(
-            car_pos, car_heading_rad, left_boundary, right_boundary, cone_map, adjacency_list, perceptual_range
+            car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
         )
         perceptual_field_data.append((car_heading_rad, paths, subgraph, left_subset, right_subset))
 
