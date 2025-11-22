@@ -1,3 +1,6 @@
+import numpy as np
+from typing import List, Tuple
+
 # Type definitions for clarity
 Point = np.ndarray
 Lane = List[Point]
