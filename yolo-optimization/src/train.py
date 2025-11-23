@@ -42,8 +42,7 @@ def run_training(model_name, params_path):
   
   # Final metrics from validation (may need to add args)
   metrics = model.val()
-  
-  print(f"Final metrics: {metrics}")
+
   return results
 
 if __name__ == "__main__":
