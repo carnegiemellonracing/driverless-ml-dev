@@ -38,7 +38,7 @@ def run_training(model_name, params_path):
     **params # May warn about extra arguments, may recognize unwanted arguments
   )
   
-  # Final metrics from validation
+  # Final metrics from validation (may need to add args)
   metrics = model.val()
   
   print(f"Final metrics: {metrics}")
