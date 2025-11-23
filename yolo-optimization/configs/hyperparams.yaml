@@ -7,9 +7,8 @@ patience: 50
 workers: 0
 rect: true
 
-project: "experiments"
 name: "fsoco_train"
 optimizer: "auto"
 val: true                # val during training
 save: true               # save checkpoints
-tensorboard: true        # disable for mlflow only
+tensorboard: false       # disabled for mlflow only
