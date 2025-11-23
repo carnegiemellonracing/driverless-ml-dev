@@ -37,7 +37,7 @@ def run_training(model_name, params_path):
   # Train
   results = model.train(
     data=str(data_yaml_path),
-    **params # May warn about extra arguments, may recognize unwanted arguments
+    **params
   )
 
   return results
