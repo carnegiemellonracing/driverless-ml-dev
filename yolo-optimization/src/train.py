@@ -4,6 +4,7 @@ import yaml
 from pathlib import Path
 import mlflow
 from ultralytics import YOLO
+from ultralytics import settings
 
 import dataset
 
@@ -21,7 +22,8 @@ def run_training(model_name, params_path):
   with open(params_path, 'r') as f:
     params = yaml.safe_load(f)
     
-  # Set up experiment tracking to mounted directory
+  # Set up experiment tracking to mounted directory, set tensorboard to false explicitly
+  settings.update({"tensorboard": False})
   mlflow.set_tracking_uri("file:///root/driverless-ml-dev/ml_data/experiments/mlruns")
   exp_name = params.get("name")
   mlflow.set_experiment(exp_name)
