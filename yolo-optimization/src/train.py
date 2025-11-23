@@ -5,7 +5,7 @@ from pathlib import Path
 import mlflow
 from ultralytics import YOLO
 
-from src import dataset
+import dataset
 
 def run_training(model_name, params_path):
   """
@@ -48,7 +48,7 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="YOLO Training Pipeline")
   
   parser.add_argument("--model", type=str, default="yolov8n.pt")
-  parser.add_argument("--params", type=str, default="config/hyperparams.yaml")
+  parser.add_argument("--params", type=str, default="yolo-optimization/configs/hyperparams.yaml")
   
   args = parser.parse_args()
   

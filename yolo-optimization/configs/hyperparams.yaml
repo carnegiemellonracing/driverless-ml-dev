@@ -12,4 +12,3 @@ name: "fsoco_train"
 optimizer: "auto"
 val: true                # val during training
 save: true               # save checkpoints
-tensorboard: false       # disabled for mlflow only

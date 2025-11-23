@@ -208,3 +208,8 @@ __marimo__/
 
 # Data mount
 ml_data/
+
+# models
+*.pt
+*.onnx
+*.engine
