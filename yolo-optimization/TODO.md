@@ -1,7 +1,9 @@
 ## Code Implementation
-- [ ] super basic dataset script to just get train script going, nothing to actually do since everything alr mounted to dale
+- [X] super basic dataset script to just get train script going, nothing to actually do since everything alr mounted to dale
 - [X] base train script
 - [ ] evl script using test data directory
+- [ ] export script
+- [ ] notebook/shell script to run whichever ones needed sequentially
 
 ## Execution
 - [ ] **Populate Raw Data**: Ensure `ml_data/fsoco_raw` has the dataset.
