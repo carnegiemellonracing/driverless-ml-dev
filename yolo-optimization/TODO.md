@@ -1,9 +1,13 @@
 ## Code Implementation
 - [X] super basic dataset script to just get train script going, nothing to actually do since everything alr mounted to dale
 - [X] base train script
-- [ ] evl script using test data directory
+- [X] evl script using test data directory
 - [X] export script
-- [ ] notebook/shell script to run whichever ones needed sequentially
+- [ ] shell script to set up environment for jetson
+  - system dependencies (mirrors dockerfile)
+  - source and activate venv (check creation)
+  - pytorch compatible with current JetPack from Nvidia's PyPi
+  - all remaining packages
 
 ## Execution
 - [ ] **Run Training**: `python3 src/train.py --model yolov8n.pt --params config/hyperparams.yaml`

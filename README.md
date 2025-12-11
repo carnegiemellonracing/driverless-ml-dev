@@ -1,2 +1,3 @@
 # driverless-ml-dev
-Machine Learning-related scripts and architecture for Carnegie Mellon Racing
+
+Machine learning utilities, experiments and model artifacts used by the Carnegie Mellon Racing team.
