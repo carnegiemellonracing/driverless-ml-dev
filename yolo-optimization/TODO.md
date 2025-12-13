@@ -4,6 +4,7 @@
 - [ ] evl script using test data directory
 - [X] export script
 - [ ] notebook/shell script to run whichever ones needed sequentially
+- [ ] remove explicit mlflow 'set's, just update ultralytics settings
 
 ## Execution
 - [ ] **Run Training**: `python3 src/train.py --model yolov8n.pt --params config/hyperparams.yaml`
