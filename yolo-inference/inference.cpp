@@ -90,6 +90,30 @@ YOLODetector::~YOLODetector() {
     delete runtime;
 }
 
+std::vector<float> YOLO::preprocess(cv::Mat& img) {
+
+    cv::Mat resized;
+    cv::resize(img, resized, cv::Size(640, 640));
+
+    cv::cvtColor(resized, resized, cv::COLORBGR2RGB);
+
+    resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
+    
+    cv::Mat transposed;
+    std::vector<int> order = {2, 0, 1};
+    cv::transposeND(resized, order, transposed);
+
+    cv::Mat flat = transposed.isContinuous() ? transposed : transposed.clone();
+    float* ptr = (float *)flat.data;
+
+    size_t cnt = flat.total() * flat.channels();
+
+    std::vector<float> result;
+    result.assign(ptr, ptr + cnt);
+
+    return result;
+}
+
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
     std::vector<float> input = preprocess(img)
