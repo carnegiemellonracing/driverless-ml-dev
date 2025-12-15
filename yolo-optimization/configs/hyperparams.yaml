@@ -8,7 +8,7 @@ workers: 12
 rect: true
 
 project: "ml_data/experiments"
-name: "yolov8n"
+name: "yolov10n"
 optimizer: "auto"
 val: true                # val during training
 save: true               # save checkpoints

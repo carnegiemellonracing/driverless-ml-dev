@@ -25,7 +25,7 @@ def run_eval(weights_path, params_path):
   
   print("Constructing output path")
   project = params.get("project")
-  name = f"{params.get("name")}/eval"
+  name = f"{params.get('name')}/eval"
   
   print("Metric Evaluation on Test Split")
   print(f"Saving results to {project}/{name}")
