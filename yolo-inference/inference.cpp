@@ -20,7 +20,9 @@ struct Detection
 class Logger : public nvinfer1::ILogger {
 public:
     void log(Severity severity, const char* msg) override {
-        std::cout << msg << "n";
+        if (severity <= Severity::kINFO) {
+            std::cout << msg << "n";
+        }
     }
 } gLogger;
 
@@ -28,15 +30,15 @@ class YOLODetector {
 public:
     YOLODetector(std::string engine_file_path);
     ~YOLODetector();
-    std::vector<float> preprocess(const cv::Mat& img);
     std::vector<Detection> detect (const cv::Mat& img, float conf);
 
 private:
+    std::vector<float> preprocess(const cv::Mat& img);
+
     Logger logger;
     ICudaEngine* engine;
     IRuntime* runtime;
     IExecutionContext* context;
-
     cudaStream_t stream = nullptr;
 
     void* input_mem = nullptr;
@@ -53,15 +55,17 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
 
     std::ifstream file(engine_file_path, std::ios::binary);
     if (!file.good()) {
-        std::cerr << "[ERROR]: Unable to open file" << std::endl;
+        std::cerr << "[ERROR]: Unable to open file: " << engine_file_path << std::endl;
+        exit(1);
     }
 
-    std::vector<char> engineModelStream(size);
     size_t size;
 
     file.seekg(0, file.end);
     size = file.tellg();
     file.seekg(0, file.beg);
+
+    std::vector<char> engineModelStream(size);
     file.read(engineModelStream.data(), size)
     file.close;
 
@@ -76,7 +80,7 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     cudaMalloc(&input_mem, INPUT_SIZE);
     cudaMalloc(&output_mem, OUTPUT_SIZE);
 
-    cudaStreamCreate(stream);
+    cudaStreamCreate(&stream);
 }
 
 YOLODetector::~YOLODetector() {
@@ -95,7 +99,7 @@ std::vector<float> YOLO::preprocess(cv::Mat& img) {
     cv::Mat resized;
     cv::resize(img, resized, cv::Size(640, 640));
 
-    cv::cvtColor(resized, resized, cv::COLORBGR2RGB);
+    cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
 
     resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
     
@@ -108,7 +112,7 @@ std::vector<float> YOLO::preprocess(cv::Mat& img) {
 
     size_t cnt = flat.total() * flat.channels();
 
-    std::vector<float> result;
+    std::vector<float> result(640 * 640 * 3);
     result.assign(ptr, ptr + cnt);
 
     return result;
@@ -119,28 +123,30 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold)
     std::vector<float> input = preprocess(img)
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
 
-    cudaMemcpyAsync(input_mem, input, INPUT_SIZE, cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
     context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
     context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
     context->enqueueV3(stream)
-    cudaMemcpyAsync(output, output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
+    cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
 
     cudaStreamSynchronize(stream);
     
     std::vector<Detection> results;
 
-    for (char i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
+    for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
         
-        float conf = output[i+4];
+        int offset = i * 6;
+
+        float conf = output[offset+4];
 
         if (conf < threshold) break;
         
-        float x = output[i+0];
-        float y = output[i+1];
-        float w = output[i+2];
-        float h = output[i+3];
+        float x = output[offset+0];
+        float y = output[offset+1];
+        float w = output[offset+2];
+        float h = output[offset+3];
 
-        int label = output[i+5]
+        int label = (int)output[offset+5]
 
         Detections det;
         det.rect = cv::Rect_<float>(x, y, w, h);
@@ -149,26 +155,27 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold)
 
         results.push_back(det);
     }
+
+    return results;
 }
 
 int main(int argc, char **argv) {
-    if (argc = 0) {
-        std::cerr << "[ERROR]: include argument for engine file path" << std::endl;
+    if (argc < 3) {
+        std::cerr << "[USAGE ERROR]: ./inference <engine_path> <image_path>" << std::endl;
         return 1;
     }
 
-    YOLODetector yolo(argv[1]);
-
-    if (argc = 1) {
-        std::cerr << "[ERROR]: include argument for image file path" << std::endl;
-        return 1;
-    }
-
-    cv::Mat img = cv::imread(argv[2]);
+    std::string engine_path = argv[1];
+    std::string image_path = argv[2];
+    
+    YOLODetector yolo(engine_path);
+    cv::Mat img = cv::imread(image_path);
 
     if (!img.empty()) {
         auto dets = yolo.detect(img, 0.7f);
         std::cout << "Detected " << dets.size() << "objects." << std::endl;
+
+        // TODO: Add an optional drawing of each bounding box
     }
 
     return 0;
