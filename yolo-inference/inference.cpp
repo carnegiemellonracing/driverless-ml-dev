@@ -19,7 +19,7 @@ struct Detection
 
 class Logger : public nvinfer1::ILogger {
 public:
-    void log(Severity severity, const char* msg) override {
+    void log(Severity severity, const char* msg) noexcept override {
         if (severity <= Severity::kINFO) {
             std::cout << msg << "n";
         }
@@ -66,16 +66,12 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     file.seekg(0, file.beg);
 
     std::vector<char> engineModelStream(size);
-    file.read(engineModelStream.data(), size)
-    file.close;
+    file.read(engineModelStream.data(), size);
+    file.close();
 
     runtime = createInferRuntime(logger);
     engine = runtime->deserializeCudaEngine(engineModelStream.data(), size);
     context = engine->createExecutionContext();
-
-    if (!context->setInputShape()) {
-        std::cerr << "[ERROR]: Unable to set input shape"<< std::endl;
-    }
 
     cudaMalloc(&input_mem, INPUT_SIZE);
     cudaMalloc(&output_mem, OUTPUT_SIZE);
@@ -94,7 +90,7 @@ YOLODetector::~YOLODetector() {
     delete runtime;
 }
 
-std::vector<float> YOLO::preprocess(cv::Mat& img) {
+std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
 
     cv::Mat resized;
     cv::resize(img, resized, cv::Size(640, 640));
@@ -120,13 +116,13 @@ std::vector<float> YOLO::preprocess(cv::Mat& img) {
 
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
-    std::vector<float> input = preprocess(img)
+    std::vector<float> input = preprocess(img);
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
 
     cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
     context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
     context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
-    context->enqueueV3(stream)
+    context->enqueueV3(stream);
     cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
 
     cudaStreamSynchronize(stream);
@@ -146,9 +142,9 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold)
         float w = output[offset+2];
         float h = output[offset+3];
 
-        int label = (int)output[offset+5]
+        int label = (int)output[offset+5];
 
-        Detections det;
+        Detection det;
         det.rect = cv::Rect_<float>(x, y, w, h);
         det.prob = conf;
         det.label = label;
