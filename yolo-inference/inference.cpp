@@ -20,8 +20,8 @@ struct Detection
 class Logger : public nvinfer1::ILogger {
 public:
     void log(Severity severity, const char* msg) noexcept override {
-        if (severity <= Severity::kINFO) {
-            std::cout << msg << "n";
+        if (severity <= Severity::kVERBOSE) {
+            std::cout << msg << "\n";
         }
     }
 } gLogger;
@@ -99,17 +99,20 @@ std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
 
     resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
     
-    cv::Mat transposed;
-    std::vector<int> order = {2, 0, 1};
-    cv::transposeND(resized, order, transposed);
+    // TODO: Implement HWC -> CHW, return result
+    std::vector<float> result(3 * 640 * 640);
+    float* data = result.data();
 
-    cv::Mat flat = transposed.isContinuous() ? transposed : transposed.clone();
-    float* ptr = (float *)flat.data;
+    const float* ptr = (float*)resized.data;
+    const int num_pixels = 640*640;
 
-    size_t cnt = flat.total() * flat.channels();
+    for (int i = 0; i < num_pixels; ++i) {
+        int offset = i * 3;
 
-    std::vector<float> result(640 * 640 * 3);
-    result.assign(ptr, ptr + cnt);
+        data[i] = ptr[offset];
+        data[num_pixels + i] = ptr[offset + 1];
+        data[2 * num_pixels + i] = ptr[offset + 2];
+    }
 
     return result;
 }
@@ -169,7 +172,7 @@ int main(int argc, char **argv) {
 
     if (!img.empty()) {
         auto dets = yolo.detect(img, 0.7f);
-        std::cout << "Detected " << dets.size() << "objects." << std::endl;
+        std::cout << "Detected " << dets.size() << " objects." << std::endl;
 
         // TODO: Add an optional drawing of each bounding box
     }
