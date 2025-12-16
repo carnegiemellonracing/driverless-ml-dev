@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <chrono>
 #include <unordered_map>
 
 #include <cuda_runtime.h>
@@ -170,12 +171,34 @@ int main(int argc, char **argv) {
     YOLODetector yolo(engine_path);
     cv::Mat img = cv::imread(image_path);
 
-    if (!img.empty()) {
-        auto dets = yolo.detect(img, 0.7f);
-        std::cout << "Detected " << dets.size() << " objects." << std::endl;
-
-        // TODO: Add an optional drawing of each bounding box
+    if (img.empty()) {
+        std::cerr << "[ERROR]: image empty at path: " << image_path << std::endl;
     }
+
+    std::cout << "[INFO] Starting Warm-up" << std::endl;
+    const int NUM_WARMUP = 10;
+    for (int i = 0; i < NUM_WARMUP; ++i) {
+       yolo.detect(img, 0.7f); 
+    }
+
+    const int NUM_ITERATIONS = 1000;
+    std::cout << "[INFO] Starting benchmarking on " << NUM_ITERATIONS << " runs" << std::endl;
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < NUM_ITERATIONS; ++i) {
+       yolo.detect(img, 0.7f); 
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    int latency = duration / NUM_ITERATIONS;
+    int fps = 1000.0f / latency;
+
+    std::cout << "Average latency: " << latency << " ms." << std::endl;
+    std::cout << "Average fps: " << fps << " fps." << std::endl; 
 
     return 0;
 }
