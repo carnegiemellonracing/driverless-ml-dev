@@ -1,0 +1,43 @@
+tuning:
+  iterations: 15
+  grace_period: 10
+  epochs: 100
+
+train_args:
+  imgsz: 640
+  batch: -1
+  workers: 12
+  rect: true
+  patience: 20
+  project: "ml_data/experiments"
+  name: "ray_tune"
+
+# [type, arg1, arg2] -> uniform/loguniform/choice
+search_space:
+  lr0: ["loguniform", 1.0e-4, 1.0e-2]
+  lrf: ["uniform", 0.05, 0.3]
+  momentum: ["uniform", 0.85, 0.98]
+  weight_decay: ["loguniform", 1.0e-5, 1.0e-3]
+  warmup_epochs: ["uniform", 1.0, 5.0]
+  warmup_momentum: ["uniform", 0.5, 0.9]
+  
+  box: ["uniform", 5.0, 10.0]
+  cls: ["uniform", 0.5, 2.0]
+  
+  # conservative hsv - cone colors are semantic
+  hsv_h: ["uniform", 0.0, 0.02]
+  hsv_s: ["uniform", 0.0, 0.4]
+  hsv_v: ["uniform", 0.0, 0.5]
+  
+  degrees: ["uniform", 0.0, 15.0]
+  translate: ["uniform", 0.0, 0.2]
+  scale: ["uniform", 0.2, 0.8]
+  shear: ["uniform", 0.0, 5.0]
+  perspective: ["uniform", 0.0, 0.0005]
+  
+  fliplr: ["uniform", 0.0, 0.5]
+  flipud: ["choice", [0.0]]
+  
+  mosaic: ["uniform", 0.5, 1.0]
+  mixup: ["uniform", 0.0, 0.3]
+  copy_paste: ["uniform", 0.0, 0.3]
