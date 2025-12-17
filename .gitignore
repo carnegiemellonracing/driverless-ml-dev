@@ -216,3 +216,5 @@ runs/
 *.pt
 *.onnx
 *.engine
+
+._*
