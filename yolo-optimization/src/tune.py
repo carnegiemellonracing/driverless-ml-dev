@@ -4,6 +4,7 @@ from ray import tune
 from ultralytics import YOLO
 from ultralytics import settings
 import mlflow
+import os
 
 import dataset
 
@@ -30,11 +31,13 @@ def run_tuning(model_name, config_path, resume=False):
   
   print("Preparing dataset")
   data_yaml = dataset.prepare()
-
-  settings.update({"mlflow": True, "tensorboard": False})
-  mlflow.set_tracking_uri("file:///root/driverless-ml-dev/ml_data/experiments/mlruns")
-  exp_name = f"{train_args.get('name', 'ray_tune')}_{model_name}"
-  mlflow.set_experiment(exp_name)
+  
+  os.environ["MLFLOW_TRACKING_URI"] = "file:///root/driverless-ml-dev/ml_data/experiments/mlflow_tracking"
+  os.environ["MLFLOW_EXPERIMENT_NAME"] = f"{train_args.get('name', 'ray_tune')}_{model_name}"
+  settings.update({
+    "tensorboard": False,
+    "mlflow": True
+  })
   
   print(f"Loading model {model_name}")
   model = YOLO(model_name)
