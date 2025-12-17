@@ -1,4 +1,5 @@
 # load data, model, train, validate, benchmark
+import os
 import argparse
 import yaml
 from pathlib import Path
@@ -23,11 +24,12 @@ def run_training(model_name, params_path):
     params = yaml.safe_load(f)
     
   # Set up experiment tracking to mounted directory, set tensorboard to false explicitly
-  settings.update({"tensorboard": False})
-  mlflow.set_tracking_uri("file:///root/driverless-ml-dev/ml_data/experiments/mlruns")
-  exp_name = params.get("name")
-  mlflow.set_experiment(exp_name)
-  print(f"MLflow Experiment set to {exp_name}")
+  os.environ["MLFLOW_TRACKING_URI"] = "file:///root/driverless-ml-dev/ml_data/experiments/mlflow_tracking"
+  os.environ["MLFLOW_EXPERIMENT_NAME"] = params.get("name")
+  settings.update({
+    "tensorboard": False,
+    "mlflow": True
+  })
   
   # Load model
   model = YOLO(model_name)
@@ -37,11 +39,8 @@ def run_training(model_name, params_path):
   # Train
   results = model.train(
     data=str(data_yaml_path),
-    **params # May warn about extra arguments, may recognize unwanted arguments
+    **params
   )
-  
-  # Final metrics from validation (may need to add args)
-  metrics = model.val()
 
   return results
 
