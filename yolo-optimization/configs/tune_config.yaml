@@ -1,6 +1,7 @@
 tuning:
   iterations: 15
   grace_period: 10
+  gpu_per_trial: 1
   epochs: 100
 
 train_args:

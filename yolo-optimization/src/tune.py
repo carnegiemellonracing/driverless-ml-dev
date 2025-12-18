@@ -47,6 +47,7 @@ def run_tuning(model_name, config_path, resume=False):
     "space": search_space,
     "epochs": tuning_cfg["epochs"],
     "iterations": tuning_cfg["iterations"],
+    "gpu_per_trial": tuning_cfg.get("gpu_per_trial", 1),
     "grace_period": tuning_cfg["grace_period"],
     "use_ray": True,
     "resume": resume,
