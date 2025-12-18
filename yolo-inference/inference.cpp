@@ -95,12 +95,22 @@ YOLODetector::~YOLODetector() {
 std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
 
     cv::Mat resized;
-    cv::resize(img, resized, cv::Size(640, 640));
+    {
+        nvtx3::scoped_range r{"resize"};
+        cv::resize(img, resized, cv::Size(640, 640));
+    }
 
-    cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+    {
+        nvtx3::scoped_range r{"colorTransform"};
+        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+    }
 
-    resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
+    {
+        nvtx3::scoped_range r{"fpConvert"};
+        resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
+    }
     
+    nvtx3::scoped_range r{"HWC->CHW"};
     std::vector<float> result(3 * 640 * 640);
     float* data = result.data();
 

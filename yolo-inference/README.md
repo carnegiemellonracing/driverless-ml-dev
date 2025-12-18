@@ -8,14 +8,14 @@ usage as specified in inference.cpp with relative paths
 
 to make nsight analysis file:
 sudo nsys profile \
-    --trace=cuda,nvtx \
+    --accelerator-trace='tegra-accelerators' \
+    --trace=cuda,nvtx,osrt \
     --sample=process-tree \
     --cuda-memory-usage=true \
-    --gpu-metrics-devices=0 \
-    --gpu-metrics-frequency=20000 \
+    --soc-metrics=true \
+    --soc-metrics-frequency=20000 \
+    --soc-metrics-set=t234 \
     --stats=true \
     --force-overwrite=true \
-    --output=v11n \
+    --output=v11n-3 \
     ./yolo-inference/build/inference ml_data/model_saves/11v_runs/yolo11n/weights/model_nms.engine ml_data/fsoco_yolo/images/test/amz_amz_00097.jpg
-
-TODO: ADD SOC-METRICS INSTEAD OF GPU-METRICS. ALSO EXPERIMENT WITH ortx TRACES.
