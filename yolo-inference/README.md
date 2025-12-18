@@ -17,3 +17,5 @@ sudo nsys profile \
     --force-overwrite=true \
     --output=v11n \
     ./yolo-inference/build/inference ml_data/model_saves/11v_runs/yolo11n/weights/model_nms.engine ml_data/fsoco_yolo/images/test/amz_amz_00097.jpg
+
+TODO: ADD SOC-METRICS INSTEAD OF GPU-METRICS. ALSO EXPERIMENT WITH ortx TRACES.
