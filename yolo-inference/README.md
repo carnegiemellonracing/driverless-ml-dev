@@ -15,4 +15,5 @@ sudo nsys profile \
     --gpu-metrics-frequency=20000 \
     --stats=true \
     --force-overwrite=true \
-    ./yolo-inference/build/inference ml_data/model_saves/8v_runs/yolov8n/model_nms.engine ml_data/fsoco_yolo/images/test/amz_amz_00097.jpg
+    --output=v11n \
+    ./yolo-inference/build/inference ml_data/model_saves/11v_runs/yolo11n/weights/model_nms.engine ml_data/fsoco_yolo/images/test/amz_amz_00097.jpg
