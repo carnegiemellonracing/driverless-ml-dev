@@ -218,3 +218,6 @@ runs/
 *.engine
 
 ._*
+
+*.nsys-rep
+*.sqlite

@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
 #include <NvInfer.h>
+#include <nvtx3/nvtx3.hpp>
 
 using namespace nvinfer1;
 
@@ -100,7 +101,6 @@ std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
 
     resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
     
-    // TODO: Implement HWC -> CHW, return result
     std::vector<float> result(3 * 640 * 640);
     float* data = result.data();
 
@@ -120,17 +120,37 @@ std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
 
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
-    std::vector<float> input = preprocess(img);
+    std::vector<float> input;
+    {
+        nvtx3::scoped_range r{"preprocess"};
+        input = preprocess(img); 
+    }
+
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
-
-    cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
-    context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
-    context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
-    context->enqueueV3(stream);
-    cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
-
-    cudaStreamSynchronize(stream);
     
+    {
+        nvtx3::scoped_range r{"H2D_memcpy"};
+        cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
+    }
+    
+    {
+        nvtx3::scoped_range r{"inference"};
+        context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
+        context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
+        context->enqueueV3(stream);
+    }
+
+    {   
+        nvtx3::scoped_range r{"D2H_memcpy"};
+        cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
+    }
+
+    {
+        nvtx3::scoped_range r{"sync"};
+        cudaStreamSynchronize(stream);
+    }
+    
+    nvtx3::scoped_range r{"postprocess"};
     std::vector<Detection> results;
 
     for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
@@ -176,12 +196,12 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "[INFO] Starting Warm-up" << std::endl;
-    const int NUM_WARMUP = 10;
+    const int NUM_WARMUP = 5;
     for (int i = 0; i < NUM_WARMUP; ++i) {
        yolo.detect(img, 0.7f); 
     }
 
-    const int NUM_ITERATIONS = 1000;
+    const int NUM_ITERATIONS = 20;
     std::cout << "[INFO] Starting benchmarking on " << NUM_ITERATIONS << " runs" << std::endl;
 
     auto start = std::chrono::high_resolution_clock::now();
