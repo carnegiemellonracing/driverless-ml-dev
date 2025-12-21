@@ -1,8 +1,8 @@
 tuning:
   iterations: 30
-  grace_period: 10
+  grace_period: 20
   gpu_per_trial: 1
-  epochs: 50
+  epochs: 100
 
 train_args:
   imgsz: 640
