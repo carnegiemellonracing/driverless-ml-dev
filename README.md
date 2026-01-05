@@ -71,6 +71,7 @@ Key lesson learned: **optimize for simplicity and real hardware early**.
 
 | Model | Params | Input | Batch | Precision | Warm-Start Latency | Notes |
 |------|--------|-------|-------|-----------|--------------------|-------|
+| YOLOv5 | — | 640×640 | 1 | FP32 | ~20 ms | Current baseline |
 | YOLOv8n | ~3.2M | 640×640 | 1 | FP16 | ~10–12 ms | TensorRT optimized |
 | YOLOv10n | ~2.7M | 640×640 | 1 | FP16 | **~7–8 ms** | Fastest variant |
 | YOLOv11n | ~3.0M | 640×640 | 1 | FP16 | ~10–12 ms | TensorRT optimized |
