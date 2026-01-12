@@ -25,10 +25,15 @@ engine:
 
 infer_bin:
 	mkdir -p yolo-inference/build
-	cd yolo-inference/build && g++ ../inference.cpp -o inference -O3 `pkg-config --cflags --libs opencv4` \
+	cd yolo-inference/build && g++ ../inference.cpp -o inference -O3 -std=c++17 \
+	  `pkg-config --cflags --libs opencv4` \
 	  -I/usr/local/cuda/include \
 	  -I/opt/nvidia/nsight-systems/2024.5.4/target-linux-tegra-armv8/nvtx/include \
-	  -L/usr/local/cuda/lib64 -lnvinfer -lcudart -pedantic-errors -Wall -Wextra
+	  -I/opt/nvidia/cvcuda0/include \
+	  -L/usr/local/cuda/lib64 -lnvinfer -lcudart \
+	  -L/opt/nvidia/cvcuda0/lib -lcvcuda -lnvcv_types \
+	  -Wl,-rpath,/opt/nvidia/cvcuda0/lib \
+	  -pedantic-errors -Wall -Wextra
 
 run:
 	$(INFER_CMD) | tee $(ENGINE).run.log
