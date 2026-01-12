@@ -53,6 +53,8 @@ Our goal is to:
 - **yolo-optimization/**  
   TensorRT export, profiling, and performance optimization workflows.
 
+- **bench/**
+  Standardized Makefile tools for building, running, and profiling tensorRT engines
 ---
 
 ## Executive Summary (Fall Semester)

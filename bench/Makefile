@@ -1,0 +1,38 @@
+include bench/vars.mk
+
+TRT_WS_FLAG := $(shell trtexec --help 2>/dev/null | grep -q -- '--memPoolSize' && echo "--memPoolSize=workspace:$(TRT_WS)" || echo "--workspace=$(TRT_WS)")
+
+.PHONY: engine run profile show infer_bin
+
+# ---- Define the commands once ----
+TRT_CMD    := trtexec --onnx=$(ONNX) --saveEngine=$(ENGINE) $(TRT_PREC) $(TRT_WS_FLAG) $(TRT_SHAPES) $(TRT_EXTRA)
+INFER_CMD  := $(INFER_BIN) $(ENGINE) $(IMG)
+NSYS_CMD   := sudo nsys profile $(NSYS_OPTS) --output=$(NSYS_OUT) $(INFER_CMD)
+
+show:
+	@echo "trtexec build command:"
+	@echo $(TRT_CMD)
+	@echo
+	@echo "infer command:"
+	@echo $(INFER_CMD)
+	@echo
+	@echo "profile command:"
+	@echo $(NSYS_CMD)
+
+engine:
+	mkdir -p $(dir $(ENGINE))
+	$(TRT_CMD) | tee $(ENGINE).build.log
+
+infer_bin:
+	mkdir -p yolo-inference/build
+	cd yolo-inference/build && g++ ../inference.cpp -o inference -O3 `pkg-config --cflags --libs opencv4` \
+	  -I/usr/local/cuda/include \
+	  -I/opt/nvidia/nsight-systems/2024.5.4/target-linux-tegra-armv8/nvtx/include \
+	  -L/usr/local/cuda/lib64 -lnvinfer -lcudart -pedantic-errors -Wall -Wextra
+
+run:
+	$(INFER_CMD) | tee $(ENGINE).run.log
+
+profile:
+	mkdir -p $(dir $(NSYS_OUT))
+	$(NSYS_CMD) | tee $(NSYS_OUT).nsys.log
