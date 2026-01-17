@@ -123,9 +123,12 @@ def get_closest(point_id, boundary, cone_map):
             closest_id = id
     return closest_id
 
-def get_car_pos(left_id, right_boundary, cone_map):
+def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     """
-
+        Takes point on left boundary, entire right_boundary, cone_map, and optional noise parameters
+        Returns potential car position and heading in radians
+            position is midpoint between left point and closest right point
+            heading is perpendicular to the line between the left point and closest right point
     """
     left_pt = cone_map.get(left_id)
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
@@ -133,9 +136,10 @@ def get_car_pos(left_id, right_boundary, cone_map):
             
     midpt = left_pt + closest_right_pt / 2
 
-    angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None)
+    angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None) if noise else 0.0
+
     #Perpendicular so negative reciprocal
-    flip = np.random.choice([-1,1])
+    flip = np.random.choice([-1,1]) if noise else 1.0
     car_heading_rad = flip * math.atan2(
         left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1]) + angle_noise
     return midpt, car_heading_rad

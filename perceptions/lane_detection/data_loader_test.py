@@ -38,9 +38,9 @@ def get_car_pos_no_noise_test():
     left_id = 0
     right_boundary = [1, 2]
     cone_map = {0: np.array([0, 0]), 1: np.array([1, 0]), 2: np.array([1, 1])}
-    car_pos, heading = get_car_pos(left_id, right_boundary, cone_map)
-    print(car_pos, heading)
-    assert np.all(car_pos == np.array([0.5, 0])) and heading == -math.pi/2
+    car_pos, heading = get_car_pos(left_id, right_boundary, cone_map, noise=False)
+    assert np.all(car_pos == np.array([0.5, 0]))
+    assert heading == -math.pi/2
     print("Passed get_car_pos_no_noise_test")
 
 def filter_points_within_range_test(): 
