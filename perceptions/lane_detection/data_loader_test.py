@@ -1,7 +1,7 @@
 import numpy as np
 import math
 from geo import within_range, within_range, within_cone
-from data_loader import get_car_pos, filter_points_within_range, get_closest
+from data_loader import get_car_pos, filter_points_within_range, get_closest, build_adjacency_graph
 
 def test():
     within_range_test()
@@ -9,6 +9,7 @@ def test():
     get_closest_test()
     get_car_pos_no_noise_test()
     filter_points_within_range_test()
+    build_adjacency_graph_test()
 
 def within_range_test():
     car_pos = np.array([0, 0])
@@ -62,6 +63,29 @@ def filter_points_within_range_test():
     assert filter_points_within_range(car_pos, car_heading_rad, cone_map, graph, perceptual_range, cone_rad) == filtered_graph
     assert filter_points_within_range(car_pos, car_heading_rad, cone_map, graph, perceptual_range, cone_rad) == filtered_graph
     print("Passed filter_points_within_range_test")
+
+def build_adjacency_graph_test(): 
+    cone_map = np.array([[0, 0],
+                        [1, 0],
+                        [1, 1],
+                        [1, 10],
+                        [2, 11]])
+    assert build_adjacency_graph(cone_map) == {0: [1,2], 1: [0,2], 2: [0, 1], 3: [4], 4: [3]}
+    
+    cone_map = np.array([[0, 0],
+                        [1, 0],
+                        [1, 1]])
+    
+    assert build_adjacency_graph(cone_map) == {0: [1,2], 1: [0,2], 2: [0, 1]}
+    
+    cone_map = np.array([[1, 0],
+                        [0, 1],
+                        [-1, -1]])
+    
+    assert build_adjacency_graph(cone_map) == {0: [1,2], 1: [0,2], 2: [0, 1]}
+    print("Passed build_adjacency_graph_test")
+
+
 
 
 if __name__ == "__main__":

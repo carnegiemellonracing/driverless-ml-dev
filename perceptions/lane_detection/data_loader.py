@@ -22,34 +22,29 @@ left_boundaries = [mp['left_boundary_indices'] for mp in map_data]
 # Same for right
 right_boundaries = [mp['right_boundary_indices'] for mp in map_data]
 
+
 def build_adjacency_graph(cone_map, dmax=5.0):
     """
     Build adjacency graph from cone_map dictionary.
 
     Args:
-        cone_map: Dictionary mapping cone_id to [x, y] coordinates
+        cone_map: nx2 np array mapping cone_id to [x, y] coordinates
         dmax: Maximum distance threshold for adjacency (default: 5.0m)
 
     Returns:
         adjacency_list: Dictionary mapping point_idx to list of adjacent point indices
-        points: List of [x, y] coordinates (for reference)
-        cone_ids: List of cone IDs corresponding to each point index
     """
-    # Convert cone_map to list of points
-    cone_ids = list(cone_map.keys())
-    points = [cone_map[cone_id] for cone_id in cone_ids]
-
     # Build adjacency list using geo.py logic
-    adjacency_list = {i: [] for i in range(len(points))}
+    adjacency_list = {i: [] for i in range(len(cone_map))}
 
-    for i in range(len(points)):
-        for j in range(i + 1, len(points)):
-            distance = np.linalg.norm(np.array(points[i]) - np.array(points[j]))
+    for i in range(len(cone_map)):
+        for j in range(i + 1, len(cone_map)):
+            distance = np.linalg.norm(np.array(cone_map[i]) - np.array(cone_map[j]))
             if distance <= dmax:
                 adjacency_list[i].append(j)
                 adjacency_list[j].append(i)
 
-    return adjacency_list, points, cone_ids
+    return adjacency_list
 
 
 def subgraph_add(subgraph, point, graph):
@@ -140,13 +135,11 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     return midpt, car_heading_rad
 
 def generate_perceptual_field_data(
-    boundary, cone_map, perceptual_range=30, dmax=5
+    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
 ):
     perceptual_field_data = []
     # Build adjacency graph with cone_id mapping
-    adjacency_list, points, cone_ids = build_adjacency_graph(cone_map, dmax)
-    left_boundary = boundary["left"]
-    right_boundary = boundary["right"]
+    adjacency_list = build_adjacency_graph(cone_map, dmax)
 
     # Filter out points outside perceptual range. Generate a perceptual field using every left point
     for left_id in left_boundary:
@@ -154,6 +147,6 @@ def generate_perceptual_field_data(
         subgraph = filter_points_within_range(
             car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
         )
-        perceptual_field_data.append((car_heading_rad, paths, subgraph, left_subset, right_subset))
+        perceptual_field_data.append((car_pos, car_heading_rad, subgraph))
 
     return perceptual_field_data
