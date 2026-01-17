@@ -74,7 +74,7 @@ def subgraph_add(subgraph, point, graph):
 
 def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
                                 cone_map: np.ndarray, graph: Dict[int, List[int]],
-                                perceptual_range: float, cone_angle_rad:float = 120.0):
+                                perceptual_range: float, cone_angle_rad:float = 120.0 * np.pi/180):
     """
     Returns:
     - Subgraph perceptual field
