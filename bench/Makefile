@@ -5,7 +5,7 @@ TRT_WS_FLAG := $(shell trtexec --help 2>/dev/null | grep -q -- '--memPoolSize' &
 .PHONY: engine run profile show infer_bin
 
 # ---- Define the commands once ----
-TRT_CMD    := trtexec --onnx=$(ONNX) --saveEngine=$(ENGINE) $(TRT_PREC) $(TRT_WS_FLAG) $(TRT_SHAPES) $(TRT_EXTRA)
+TRT_CMD    := trtexec --onnx=$(ONNX) --saveEngine=$(ENGINE) $(TRT_PREC) $(TRT_WS_FLAG) $(TRT_EXTRA) # $(TRT_SHAPES)
 INFER_CMD  := $(INFER_BIN) $(ENGINE) $(IMG)
 NSYS_CMD   := sudo nsys profile $(NSYS_OPTS) --output=$(NSYS_OUT) $(INFER_CMD)
 
