@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-from data_loader import LaneDetectionDataset, generate_perceptual_field_data
+from data_loader import generate_perceptual_field_data
+from dataset import LaneDetectionDataset
 from model import ConeClassifier
 
 def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50, optimizer_ = optim.Adam):

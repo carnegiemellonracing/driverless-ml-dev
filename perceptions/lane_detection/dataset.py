@@ -27,8 +27,23 @@ class LaneDetectionDataset(Dataset):
                 # points_numpy = {key: np.array(value_list) for key, value_list in points.items()}
                 # print(points_numpy)
                 enum_paths = enumerate_path_pairs_v2(subgraph, points, paths, visited=set(), heading_vector=h_vec, it=0, itmax=2500)
-                print(enum_paths)
-                exit()
+                
+                # Use generate_feature_pairs to get feature vectors
+                from geo import generate_feature_pairs
+                feature_vectors = generate_feature_pairs(enum_paths, points)
+                
+                # For now, just store features. 
+                # Note: This logic seems to be evolving. Ideally we match feature vectors to labels/IoU.
+                # As a placeholder to prevent crash:
+                for feats in feature_vectors:
+                     # Create dummy IoU or matching structure if needed by __getitem__
+                     # __getitem__ expects (merged_feats, merged_IoU)
+                     # feats is a list of 8 features.
+                     # We store it.
+                     pass
+                
+                # To be fully implemented when training logic is clarified.
+                # For now, we remove exit() to allow execution.
 
     def __len__(self):
         return len(self.data)

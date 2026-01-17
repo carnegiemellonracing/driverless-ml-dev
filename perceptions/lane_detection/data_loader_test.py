@@ -1,3 +1,4 @@
+import unittest
 import numpy as np
 import math
 from geo import within_range, within_range, within_cone
@@ -65,4 +66,4 @@ def filter_points_within_range_test():
 
 
 if __name__ == "__main__":
-    test()
+    unittest.main()

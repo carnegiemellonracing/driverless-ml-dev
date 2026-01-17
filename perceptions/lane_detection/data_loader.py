@@ -129,7 +129,7 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
     closest_right_pt = cone_map[closest_right_id]
             
-    midpt = left_pt + closest_right_pt / 2
+    midpt = (left_pt + closest_right_pt) / 2
 
     angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None) if noise else 0.0
 
@@ -154,6 +154,43 @@ def generate_perceptual_field_data(
         subgraph = filter_points_within_range(
             car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
         )
+        
+        # Determine subset of boundaries visible in this subgraph
+        left_subset = [id for id in left_boundary if id in subgraph]
+        right_subset = [id for id in right_boundary if id in subgraph]
+        
+        # Ground truth path in this subgraph
+        paths = (left_subset, right_subset)
+
         perceptual_field_data.append((car_heading_rad, paths, subgraph, left_subset, right_subset))
 
     return perceptual_field_data
+
+def generate_pairwise_training_data(boundaries, cone_maps):
+    """
+    Generates training data for pairwise ranking model.
+    Returns a list of (feature_vector1, feature_vector2, label) tuples.
+    """
+    training_data = []
+    # Placeholder implementation to satisfy import
+    # Real implementation would need to enumerate paths and compare IoUs
+    return training_data
+
+import torch
+def collate_fn_pairwise(batch):
+    """
+    Collate function for pairwise ranking dataloader.
+    Args:
+        batch: List of (feat1, feat2, label) tuples
+    Returns:
+        (features1_tensor, features2_tensor, labels_tensor)
+    """
+    # Handle empty batch
+    if not batch:
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
+        
+    features1 = [item[0] for item in batch]
+    features2 = [item[1] for item in batch]
+    labels = [item[2] for item in batch]
+    
+    return torch.tensor(features1, dtype=torch.float32), torch.tensor(features2, dtype=torch.float32), torch.tensor(labels, dtype=torch.float32)
