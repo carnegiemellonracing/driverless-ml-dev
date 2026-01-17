@@ -105,17 +105,31 @@ def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
 
     return subgraph
 
-def get_car_pos(left_id, right_boundary, cone_map):
+def get_closest(point_id, boundary, cone_map):
+    """
+        Takes point id, boundary (list of indicies), and dictionary that maps ids to point locations
+        Returns the point closest to point_id within boundary, returns ID
+        Will return point_id if it is in the boundary, will return [] if no points in boundary
+    """
     min_dist = float('inf')
-    closest_right_pt = []
-    left_pt = cone_map.get(left_id)
+    closest_id = []
+    pt = cone_map.get(point_id)
     
-    for id in right_boundary:
+    for id in boundary:
         point = cone_map.get(id)
-        dist = np.linalg.norm(left_pt - point)
+        dist = np.linalg.norm(pt - point)
         if dist < min_dist:
             min_dist = dist
-            closest_right_pt = point
+            closest_id = id
+    return closest_id
+
+def get_car_pos(left_id, right_boundary, cone_map):
+    """
+
+    """
+    left_pt = cone_map.get(left_id)
+    closest_right_id = get_closest(left_id, right_boundary, cone_map)
+    closest_right_pt = cone_map.get(closest_right_id)
             
     midpt = left_pt + closest_right_pt / 2
 
