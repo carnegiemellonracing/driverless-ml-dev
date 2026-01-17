@@ -8,24 +8,19 @@ from geo import within_range, within_cone
 Reading from the dataset
 
 """
-dataset_path = f"{os.path.dirname(__file__)}/dataset"
+dataset_path = f"{os.path.dirname(__file__)}/dataset/processed"
 
 # 1. Load the dataset (boundaries and cone maps)
-def load_yaml_data(path):
-    with open(path, "r") as file:
-        return yaml.load(file, Loader=yaml.FullLoader)
-    
-def load_cone_map(map: Dict[int, List[int]]) -> Dict[int, np.ndarray]:
-    """Takes yaml dictionary and turns points into numpy arrays"""
-    return {ID:np.array(point) for ID, point in map.items()}
+def load_numpy_data(path):
+    return np.load(path)
+map_data = [load_numpy_data(f"{dataset_path}/data_{i}.npz") for i in range(1, 10)]
 
-# Load all boundaries and cone maps
-boundary_paths = [f"{dataset_path}/boundaries_{i}.yaml" for i in range(1, 10)]
-cone_map_paths = [f"{dataset_path}/cone_map_{i}.yaml" for i in range(1, 10)]
-
-boundaries = [load_yaml_data(path) for path in boundary_paths]
-cone_maps = [load_cone_map(load_yaml_data(path)) for path in cone_map_paths]
-
+# A cone map is a nx2 numpy array that maps point indices to their [x,y] position
+cone_maps = [mp['points'] for mp in map_data]
+# A left boundary is an array of indices corresponding to the left track boundary
+left_boundaries = [mp['left_boundary_indices'] for mp in map_data]
+# Same for right
+right_boundaries = [mp['right_boundary_indices'] for mp in map_data]
 
 def build_adjacency_graph(cone_map, dmax=5.0):
     """
@@ -83,7 +78,7 @@ def subgraph_add(subgraph, point, graph):
 
 
 def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
-                                cone_map: Dict[int, np.ndarray], graph: Dict[int, List[int]],
+                                cone_map: np.ndarray, graph: Dict[int, List[int]],
                                 perceptual_range: float, cone_angle_rad:float = 120.0):
     """
     Returns:
@@ -93,13 +88,13 @@ def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
         left_point: Cone ID of the left boundary point to use as reference
         left_boundary: List of cone IDs that are left boundary
         right_boundary: List of cone IDs that are right boundary
-        cone_map: Dict mapping cone_id to [x, y] coordinates
+        cone_map: nx2 np.array mapping cone_id to [x, y] coordinates
         perceptual_range: Range in meters
         graph: Adjacency list
     """
     # Store all points within the perceptual range 
     subgraph = {}
-    for id, point in cone_map.items():
+    for id, point in enumerate(cone_map):
         if (within_range(point, car_pos, perceptual_range) and within_cone(point, car_pos, car_heading_rad, cone_angle_rad)): 
             subgraph = subgraph_add(subgraph, id, graph)
 
@@ -113,10 +108,10 @@ def get_closest(point_id, boundary, cone_map):
     """
     min_dist = float('inf')
     closest_id = []
-    pt = cone_map.get(point_id)
+    pt = cone_map[point_id]
     
     for id in boundary:
-        point = cone_map.get(id)
+        point = cone_map[id]
         dist = np.linalg.norm(pt - point)
         if dist < min_dist:
             min_dist = dist
@@ -130,9 +125,9 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
             position is midpoint between left point and closest right point
             heading is perpendicular to the line between the left point and closest right point
     """
-    left_pt = cone_map.get(left_id)
+    left_pt = cone_map[left_id]
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
-    closest_right_pt = cone_map.get(closest_right_id)
+    closest_right_pt = cone_map[closest_right_id]
             
     midpt = left_pt + closest_right_pt / 2
 
