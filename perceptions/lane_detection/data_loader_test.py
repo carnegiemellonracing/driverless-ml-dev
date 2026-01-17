@@ -27,7 +27,11 @@ def within_cone_test():
     print("Passed within_cone_test")
 
 def get_closest_test():
-    cone_map = {0: np.array([0, 0]), 1: np.array([1, 0]), 2: np.array([1, 1]), 3: np.array([1, 10]), 4: np.array([2, 11])}
+    cone_map = np.array([[0, 0],
+                         [1, 0],
+                         [1, 1],
+                         [1, 10],
+                         [2, 11]])
     assert get_closest(0, [1,2], cone_map) == 1
     assert get_closest(0, [1,3], cone_map) == 1
     assert get_closest(4, [1,3], cone_map) == 3
@@ -37,7 +41,9 @@ def get_closest_test():
 def get_car_pos_no_noise_test(): 
     left_id = 0
     right_boundary = [1, 2]
-    cone_map = {0: np.array([0, 0]), 1: np.array([1, 0]), 2: np.array([1, 1])}
+    cone_map = np.array([[0, 0],
+                         [1, 0],
+                         [1, 1]])
     car_pos, heading = get_car_pos(left_id, right_boundary, cone_map, noise=False)
     assert np.all(car_pos == np.array([0.5, 0]))
     assert heading == -math.pi/2
@@ -48,7 +54,9 @@ def filter_points_within_range_test():
     car_heading_rad = math.pi / 4
     cone_rad = 120 * math.pi / 180
     perceptual_range = 10
-    cone_map = {0: np.array([1, 0]), 1: np.array([0, 1]), 2: np.array([-1 ,-1])}
+    cone_map = np.array([[1, 0],
+                         [0, 1],
+                         [-1, -1]])
     graph = {0: [1, 2], 1: [0, 2], 2: [0, 1]}
     filtered_graph = {0: [1], 1: [0]} 
     assert filter_points_within_range(car_pos, car_heading_rad, cone_map, graph, perceptual_range, cone_rad) == filtered_graph
