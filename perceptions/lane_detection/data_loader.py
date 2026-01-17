@@ -120,11 +120,11 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
             position is midpoint between left point and closest right point
             heading is perpendicular to the line between the left point and closest right point
     """
-    left_pt = cone_map[left_id]
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
     closest_right_pt = cone_map[closest_right_id]
-            
-    midpt = left_pt + closest_right_pt / 2
+    left_pt = cone_map[left_id]
+
+    midpt = (left_pt + closest_right_pt) / 2
 
     angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None) if noise else 0.0
 
@@ -135,8 +135,11 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     return midpt, car_heading_rad
 
 def generate_perceptual_field_data(
-    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
-):
+    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5):
+    """
+        Take a left and right boundary, the cone map, and some params
+        Returns a list of different perceptual fields, formatted as (car position, car heading, subgraph)
+    """
     perceptual_field_data = []
     # Build adjacency graph with cone_id mapping
     adjacency_list = build_adjacency_graph(cone_map, dmax)
