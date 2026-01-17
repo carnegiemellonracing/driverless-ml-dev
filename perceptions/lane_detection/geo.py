@@ -12,22 +12,19 @@ def within_range(point, car_pos, perceptual_field):
         return True
     return False
     
-def within_cone(point: np.ndarray, car_pos: np.ndarray, heading_rad: float, cone_angle_rad: float) -> bool:
-    """
-    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
-    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
-    """
-    relative_pt = point - car_pos
-    car = np.array([np.cos(heading_rad), math.sin(heading_rad)])
-    ip = np.dot(relative_pt, car)
-
-    rounded = min(1, max(-1, ip / (np.linalg.norm(relative_pt) * np.linalg.norm(car))))
-    
-    theta = math.acos(rounded)
-    
-    if theta <= cone_angle_rad / 2:
+def within_cone(point, car_pos, heading, cone_angle):
+    """Checks if a point is within the car's field of view cone."""
+    if np.array_equal(point, car_pos):
         return True
-    return False
+    v_point = point - car_pos
+    v_heading = np.array([np.cos(heading), np.sin(heading)])
+    norm_point = np.linalg.norm(v_point)
+    if norm_point == 0:
+        return True
+    # Calculate angle between heading vector and point vector
+    dot = np.clip(np.dot(v_point / norm_point, v_heading), -1.0, 1.0)
+    angle = np.arccos(dot)
+    return angle <= (cone_angle / 2)
 
 def get_segment_angle(p1: Point, p2: Point, p3: Point) -> float:
     """Calculates the absolute deflection angle between two consecutive segments.
