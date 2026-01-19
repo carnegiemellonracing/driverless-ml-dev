@@ -10,6 +10,11 @@
 #include <NvInfer.h>
 #include <nvtx3/nvtx3.hpp>
 
+//cvcuda headers
+#include <nvcv/Tensor.hpp>
+#include <cvcuda/OpResizeCropConvertReformat.hpp>
+#include <nvcv/TensorDataAccess.hpp> //..?
+
 using namespace nvinfer1;
 
 struct Detection
@@ -35,7 +40,8 @@ public:
     std::vector<Detection> detect (const cv::Mat& img, float conf);
 
 private:
-    std::vector<float> preprocess(const cv::Mat& img);
+    // CHANGED: No longer returns vector, preprocesses directly to GPU
+    void preprocess_gpu(const cv::Mat& img);
 
     Logger logger;
     ICudaEngine* engine;
@@ -43,8 +49,18 @@ private:
     IExecutionContext* context;
     cudaStream_t stream = nullptr;
 
+    // ADD: CV-CUDA operator handle ..?
+    NVCVOperatorHandle preprocess_op = nullptr
+
     void* input_mem = nullptr;
     void* output_mem = nullptr;
+
+    //
+    std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op;
+    nvcv::Tensor input_tensor;
+    nvcv::Tensor output_tensor;
+
+    void* input_image_gpu = nullptr;
 
     static const int INPUT_SIZE = 1 * 3 * 640 * 640 * sizeof(float);
     static const int OUTPUT_SIZE = 1 * 300 * 6 * sizeof(float);
@@ -79,11 +95,42 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     cudaMalloc(&output_mem, OUTPUT_SIZE);
 
     cudaStreamCreate(&stream);
+
+    //NEW CVCUDA
+    // Create the operator (C++ object, not a handle!)
+    preprocess_op = std::make_unique<cvcuda::ResizeCropConvertReformat>();
+
+    // Allocate GPU memory for input image
+    const int max_input_width = 1920;
+    const int max_input_height = 1080;
+    cudaMalloc(&input_image_gpu, max_input_width * max_input_height * 3);
+
+    // Create output tensor that wraps TensorRT's input buffer
+    // Shape: {1, 3, 640, 640}, Layout: NCHW, Type: float32
+    nvcv::TensorDataStridedCuda::Buffer output_buffer;
+    output_buffer.basePtr = static_cast<NVCVByte*>(input_mem);
+    output_buffer.strides[0] = 3 * 640 * 640 * sizeof(float);  // batch stride
+    output_buffer.strides[1] = 640 * 640 * sizeof(float);      // channel stride
+    output_buffer.strides[2] = 640 * sizeof(float);            // height stride
+    output_buffer.strides[3] = sizeof(float);                  // width stride
+
+    nvcv::TensorShape output_shape{{1, 3, 640, 640}, "NCHW"};
+
+    nvcv::TensorDataStridedCuda output_data(
+        output_shape,
+        nvcv::DataType{NVCV_DATA_TYPE_F32},
+        output_buffer
+    );
+    
+    output_tensor = nvcv::TensorWrapData(output_data);
+
+    std::cout << "[INFO]: CV-CUDA preprocessing initialized" << std::endl;
 }
 
 YOLODetector::~YOLODetector() {
     cudaFree(input_mem);
     cudaFree(output_mem);
+    cudaFree(input_image_gpu); //NEW
 
     cudaStreamDestroy(stream);
 
@@ -92,56 +139,75 @@ YOLODetector::~YOLODetector() {
     delete runtime;
 }
 
-std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
+std::vector<float> YOLODetector::preprocess_gpu(const cv::Mat& img) { //NEW
 
-    cv::Mat resized;
+    nvtx3::scoped_range r{"preprocess_gpu"};
+    
+    // Copy input image to GPU
     {
-        nvtx3::scoped_range r{"resize"};
-        cv::resize(img, resized, cv::Size(640, 640));
-    }
-
-    {
-        nvtx3::scoped_range r{"colorTransform"};
-        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
-    }
-
-    {
-        nvtx3::scoped_range r{"fpConvert"};
-        resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
+        nvtx3::scoped_range r2{"H2D_image"};
+        size_t img_size = img.rows * img.cols * 3;
+        cudaMemcpyAsync(input_image_gpu, img.data, img_size, 
+                       cudaMemcpyHostToDevice, stream);
     }
     
-    nvtx3::scoped_range r{"HWC->CHW"};
-    std::vector<float> result(3 * 640 * 640);
-    float* data = result.data();
+    // Wrap input image as CV-CUDA tensor
+    // Shape: {1, height, width, 3}, Layout: NHWC, Type: uint8
+    {
+        nvcv::TensorDataStridedCuda::Buffer input_buffer;
+        input_buffer.basePtr = static_cast<NVCVByte*>(input_image_gpu);
+        input_buffer.strides[0] = img.rows * img.cols * 3;  // batch stride
+        input_buffer.strides[1] = img.cols * 3;             // height stride
+        input_buffer.strides[2] = 3;                        // width stride
+        input_buffer.strides[3] = 1;                        // channel stride
 
-    const float* ptr = (float*)resized.data;
-    const int num_pixels = 640*640;
-
-    for (int i = 0; i < num_pixels; ++i) {
-        int offset = i * 3;
-
-        data[i] = ptr[offset];
-        data[num_pixels + i] = ptr[offset + 1];
-        data[2 * num_pixels + i] = ptr[offset + 2];
+        nvcv::TensorShape input_shape{{1, img.rows, img.cols, 3}, "NHWC"};
+        
+        nvcv::TensorDataStridedCuda input_data(
+            input_shape,
+            nvcv::DataType{NVCV_DATA_TYPE_U8},
+            input_buffer
+        );
+        input_tensor = nvcv::TensorWrapData(input_data);
     }
-
-    return result;
+    // Run fused preprocessing on GPU
+    {
+        nvtx3::scoped_range r2{"fused_preprocess"};
+        
+        // All operations in one call!
+        (*preprocess_op)(
+            stream,
+            input_tensor,       // Input: BGR uint8 NHWC
+            output_tensor,      // Output: RGB float32 NCHW
+            {640, 640},         // resize_dim
+            NVCV_INTERP_LINEAR, // interpolation
+            {0, 0, 640, 640},   // crop_rect (x, y, w, h)
+            NVCV_CHANNEL_REVERSE,  // BGR → RGB
+            1.0f / 255.0f,      // scale
+            0.0f                // offset
+        );
+    }
+    
+    // Data is now in input_mem (TensorRT buffer), ready for inference!
 }
 
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
-    std::vector<float> input;
-    {
-        nvtx3::scoped_range r{"preprocess"};
-        input = preprocess(img); 
-    }
+    // std::vector<float> input;
+    // {
+    //     nvtx3::scoped_range r{"preprocess"};
+    //     input = preprocess(img); 
+    // }
+    
+    // GPU preprocessing
+    preprocess_gpu(img);
 
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
     
-    {
-        nvtx3::scoped_range r{"H2D_memcpy"};
-        cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
-    }
+    // {
+    //     nvtx3::scoped_range r{"H2D_memcpy"};
+    //     cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
+    // }
     
     {
         nvtx3::scoped_range r{"inference"};
@@ -231,4 +297,3 @@ int main(int argc, char **argv) {
     std::cout << "Average fps: " << fps << " fps." << std::endl; 
 
     return 0;
-}
