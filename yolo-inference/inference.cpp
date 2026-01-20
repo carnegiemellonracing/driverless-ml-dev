@@ -10,6 +10,9 @@
 #include <NvInfer.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <cvcuda/OpResizeCropConvertReformat.hpp>
+#include <nvcv/Tensor.hpp>
+
 using namespace nvinfer1;
 
 struct Detection
@@ -36,12 +39,20 @@ public:
 
 private:
     std::vector<float> preprocess(const cv::Mat& img);
+    void preprocessCuda(const cv::Mat& img);
 
     Logger logger;
     ICudaEngine* engine;
     IRuntime* runtime;
     IExecutionContext* context;
     cudaStream_t stream = nullptr;
+
+    std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op;
+
+    nvcv::Tensor input_tensor;
+    nvcv::Tensor output_tensor;
+
+    void* input_img = nullptr;
 
     void* input_mem = nullptr;
     void* output_mem = nullptr;
@@ -79,11 +90,36 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     cudaMalloc(&output_mem, OUTPUT_SIZE);
 
     cudaStreamCreate(&stream);
+
+    preprocess_op = std::make_unique<cvcuda::ResizeCropConvertReformat>();
+
+    const int MAX_INPUT_WIDTH = 1920;
+    const int MAX_INPUT_HEIGHT = 1080;
+    cudaMalloc(&input_img, MAX_INPUT_WIDTH * MAX_INPUT_HEIGHT * 3);
+
+    /* Wrap TensorRT's 'input_mem' as CV-CUDA output tensor */
+    nvcv::TensorShape outputShape{{1, 3, 640, 640}, NVCV_TENSOR_NCHW};
+
+    nvcv::TensorDataStridedCuda::Buffer outBuffer;
+    outBuffer.basePtr = static_cast<NVCVByte*>(input_mem);
+    outBuffer.strides[0] = 3 * 640 * 640 * sizeof(float);
+    outBuffer.strides[1] = 640 * 640 * sizeof(float);
+    outBuffer.strides[2] = 640 * sizeof(float);
+    outBuffer.strides[3] = sizeof(float);
+
+    nvcv::TensorDataStridedCuda outTensorData(
+        outputShape,
+        nvcv::DataType{NVCV_DATA_TYPE_F32},
+        outBuffer
+    );
+
+    output_tensor = nvcv::TensorWrapData(outTensorData);
 }
 
 YOLODetector::~YOLODetector() {
     cudaFree(input_mem);
     cudaFree(output_mem);
+    cudaFree(input_img);
 
     cudaStreamDestroy(stream);
 
@@ -128,21 +164,77 @@ std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
     return result;
 }
 
-std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
+void YOLODetector::preprocessCuda(const cv::Mat& img) {
+    nvtx3::scoped_range r{"preprocess_gpu"};
 
+    {
+        nvtx3::scoped_range r2{"H2D_image"};
+        cv::Mat host = img.isContinuous() ? img : img.clone();
+        cudaMemcpyAsync(input_img, host.data, 
+                       host.total() * host.elemSize(), 
+                       cudaMemcpyHostToDevice, stream);
+    }
+
+    {
+        nvtx3::scoped_range r2{"create_input_tensor"};
+        
+        nvcv::TensorShape inShape{{1, img.rows, img.cols, 3}, "NHWC"};
+        
+        nvcv::TensorDataStridedCuda::Buffer inBuffer;
+        inBuffer.basePtr = static_cast<NVCVByte*>(input_img);
+        inBuffer.strides[0] = img.rows * img.cols * 3;
+        inBuffer.strides[1] = img.cols * 3;
+        inBuffer.strides[2] = 3;
+        inBuffer.strides[3] = 1;
+        
+        nvcv::TensorDataStridedCuda inTensorData(
+            inShape,
+            nvcv::DataType{NVCV_DATA_TYPE_U8},
+            inBuffer
+        );
+        
+        input_tensor = nvcv::TensorWrapData(inTensorData);
+    }
+
+    {
+        nvtx3::scoped_range r2{"fused_preprocess_kernel"};
+
+        (*preprocess_op)(
+            stream,
+            input_tensor,
+            output_tensor,
+            {640, 640},
+            NVCV_INTERP_LINEAR,
+            {0, 0},
+            NVCV_CHANNEL_REVERSE,
+            1.0f / 255.0f,
+            0.0f,
+            false
+        );
+    }
+}
+
+std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
+    
+    /*
     std::vector<float> input;
     {
         nvtx3::scoped_range r{"preprocess"};
         input = preprocess(img); 
     }
+    */
+
+    preprocessCuda(img);
 
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
     
+    /*
     {
         nvtx3::scoped_range r{"H2D_memcpy"};
         cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
     }
-    
+    */
+
     {
         nvtx3::scoped_range r{"inference"};
         context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
