@@ -3,17 +3,15 @@
 #include <vector>
 #include <string>
 #include <chrono>
-#include <unordered_map>
 
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
 #include <NvInfer.h>
 #include <nvtx3/nvtx3.hpp>
 
-//cvcuda headers
-#include <nvcv/Tensor.hpp>
+// CV-CUDA headers
 #include <cvcuda/OpResizeCropConvertReformat.hpp>
-#include <nvcv/TensorDataAccess.hpp> //..?
+#include <nvcv/Tensor.hpp>
 
 using namespace nvinfer1;
 
@@ -37,10 +35,9 @@ class YOLODetector {
 public:
     YOLODetector(std::string engine_file_path);
     ~YOLODetector();
-    std::vector<Detection> detect (const cv::Mat& img, float conf);
+    std::vector<Detection> detect(const cv::Mat& img, float conf);
 
 private:
-    // CHANGED: No longer returns vector, preprocesses directly to GPU
     void preprocess_gpu(const cv::Mat& img);
 
     Logger logger;
@@ -49,18 +46,17 @@ private:
     IExecutionContext* context;
     cudaStream_t stream = nullptr;
 
-    // ADD: CV-CUDA operator handle ..?
-    NVCVOperatorHandle preprocess_op = nullptr
+    void* input_mem = nullptr;   // TensorRT's input buffer
+    void* output_mem = nullptr;  // TensorRT's output buffer
 
-    void* input_mem = nullptr;
-    void* output_mem = nullptr;
-
-    //
+    // CV-CUDA operator
     std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op;
-    nvcv::Tensor input_tensor;
-    nvcv::Tensor output_tensor;
 
-    void* input_image_gpu = nullptr;
+    // CV-CUDA tensors
+    nvcv::Tensor input_tensor;   // Will be created per-frame in preprocess_gpu()
+    nvcv::Tensor output_tensor;  // Wraps input_mem (created once in constructor)
+
+    void* input_image_gpu = nullptr;  // Temporary buffer for uploading images
 
     static const int INPUT_SIZE = 1 * 3 * 640 * 640 * sizeof(float);
     static const int OUTPUT_SIZE = 1 * 300 * 6 * sizeof(float);
@@ -71,6 +67,9 @@ private:
 
 YOLODetector::YOLODetector(std::string engine_file_path) {
 
+    // ============================================
+    // 1. TensorRT Setup
+    // ============================================
     std::ifstream file(engine_file_path, std::ios::binary);
     if (!file.good()) {
         std::cerr << "[ERROR]: Unable to open file: " << engine_file_path << std::endl;
@@ -78,7 +77,6 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     }
 
     size_t size;
-
     file.seekg(0, file.end);
     size = file.tellg();
     file.seekg(0, file.beg);
@@ -91,38 +89,54 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     engine = runtime->deserializeCudaEngine(engineModelStream.data(), size);
     context = engine->createExecutionContext();
 
-    cudaMalloc(&input_mem, INPUT_SIZE);
-    cudaMalloc(&output_mem, OUTPUT_SIZE);
-
+    // ============================================
+    // 2. Allocate GPU Buffers
+    // ============================================
+    cudaMalloc(&input_mem, INPUT_SIZE);    // TensorRT expects preprocessed data here
+    cudaMalloc(&output_mem, OUTPUT_SIZE);  // TensorRT writes detections here
     cudaStreamCreate(&stream);
 
-    //NEW CVCUDA
-    // Create the operator (C++ object, not a handle!)
+    // ============================================
+    // 3. CV-CUDA Setup
+    // ============================================
+    
+    // Create the fused preprocessing operator
     preprocess_op = std::make_unique<cvcuda::ResizeCropConvertReformat>();
 
-    // Allocate GPU memory for input image
+    // Allocate temporary buffer for uploading raw camera images
     const int max_input_width = 1920;
     const int max_input_height = 1080;
     cudaMalloc(&input_image_gpu, max_input_width * max_input_height * 3);
 
-    // Create output tensor that wraps TensorRT's input buffer
-    // Shape: {1, 3, 640, 640}, Layout: NCHW, Type: float32
-    nvcv::TensorDataStridedCuda::Buffer output_buffer;
-    output_buffer.basePtr = static_cast<NVCVByte*>(input_mem);
-    output_buffer.strides[0] = 3 * 640 * 640 * sizeof(float);  // batch stride
-    output_buffer.strides[1] = 640 * 640 * sizeof(float);      // channel stride
-    output_buffer.strides[2] = 640 * sizeof(float);            // height stride
-    output_buffer.strides[3] = sizeof(float);                  // width stride
-
-    nvcv::TensorShape output_shape{{1, 3, 640, 640}, "NCHW"};
-
-    nvcv::TensorDataStridedCuda output_data(
-        output_shape,
+    // ============================================
+    // 4. Wrap TensorRT's input_mem as CV-CUDA output tensor
+    // ============================================
+    
+    // This is the KEY part: we're telling CV-CUDA to write directly
+    // into TensorRT's input buffer (input_mem) instead of allocating
+    // its own memory
+    
+    nvcv::TensorShape outputShape{{1, 3, 640, 640}, "NCHW"};
+    
+    // Buffer descriptor tells CV-CUDA where the memory is and how to navigate it
+    nvcv::TensorDataStridedCuda::Buffer outBuffer;
+    outBuffer.basePtr = static_cast<NVCVByte*>(input_mem);  // Point to TensorRT's buffer!
+    outBuffer.strides[0] = 3 * 640 * 640 * sizeof(float);   // Batch stride
+    outBuffer.strides[1] = 640 * 640 * sizeof(float);       // Channel stride  
+    outBuffer.strides[2] = 640 * sizeof(float);             // Row stride
+    outBuffer.strides[3] = sizeof(float);                   // Column stride
+    
+    // Create the tensor data descriptor
+    nvcv::TensorDataStridedCuda outTensorData(
+        outputShape,
         nvcv::DataType{NVCV_DATA_TYPE_F32},
-        output_buffer
+        outBuffer
     );
     
-    output_tensor = nvcv::TensorWrapData(output_data);
+    // Wrap it as a tensor
+    output_tensor = nvcv::TensorWrapData(outTensorData);
+    
+    // Now when CV-CUDA writes to output_tensor, it's actually writing to input_mem!
 
     std::cout << "[INFO]: CV-CUDA preprocessing initialized" << std::endl;
 }
@@ -130,7 +144,7 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
 YOLODetector::~YOLODetector() {
     cudaFree(input_mem);
     cudaFree(output_mem);
-    cudaFree(input_image_gpu); //NEW
+    cudaFree(input_image_gpu);
 
     cudaStreamDestroy(stream);
 
@@ -139,86 +153,99 @@ YOLODetector::~YOLODetector() {
     delete runtime;
 }
 
-std::vector<float> YOLODetector::preprocess_gpu(const cv::Mat& img) { //NEW
-
+void YOLODetector::preprocess_gpu(const cv::Mat& img) {
     nvtx3::scoped_range r{"preprocess_gpu"};
     
-    // Copy input image to GPU
+    // ============================================
+    // Step 1: Upload raw image from CPU to GPU
+    // ============================================
     {
         nvtx3::scoped_range r2{"H2D_image"};
-        size_t img_size = img.rows * img.cols * 3;
-        cudaMemcpyAsync(input_image_gpu, img.data, img_size, 
+        cudaMemcpyAsync(input_image_gpu, img.data, 
+                       img.rows * img.cols * 3, 
                        cudaMemcpyHostToDevice, stream);
     }
     
-    // Wrap input image as CV-CUDA tensor
-    // Shape: {1, height, width, 3}, Layout: NHWC, Type: uint8
+    // ============================================
+    // Step 2: Wrap uploaded image as CV-CUDA input tensor
+    // ============================================
     {
-        nvcv::TensorDataStridedCuda::Buffer input_buffer;
-        input_buffer.basePtr = static_cast<NVCVByte*>(input_image_gpu);
-        input_buffer.strides[0] = img.rows * img.cols * 3;  // batch stride
-        input_buffer.strides[1] = img.cols * 3;             // height stride
-        input_buffer.strides[2] = 3;                        // width stride
-        input_buffer.strides[3] = 1;                        // channel stride
-
-        nvcv::TensorShape input_shape{{1, img.rows, img.cols, 3}, "NHWC"};
+        nvtx3::scoped_range r2{"create_input_tensor"};
         
-        nvcv::TensorDataStridedCuda input_data(
-            input_shape,
+        nvcv::TensorShape inShape{{1, img.rows, img.cols, 3}, "NHWC"};
+        
+        nvcv::TensorDataStridedCuda::Buffer inBuffer;
+        inBuffer.basePtr = static_cast<NVCVByte*>(input_image_gpu);
+        inBuffer.strides[0] = img.rows * img.cols * 3;
+        inBuffer.strides[1] = img.cols * 3;
+        inBuffer.strides[2] = 3;
+        inBuffer.strides[3] = 1;
+        
+        nvcv::TensorDataStridedCuda inTensorData(
+            inShape,
             nvcv::DataType{NVCV_DATA_TYPE_U8},
-            input_buffer
+            inBuffer
         );
-        input_tensor = nvcv::TensorWrapData(input_data);
+        
+        input_tensor = nvcv::TensorWrapData(inTensorData);
     }
-    // Run fused preprocessing on GPU
+    
+    // ============================================
+    // Step 3: Run fused preprocessing
+    // ============================================
     {
         nvtx3::scoped_range r2{"fused_preprocess"};
         
-        // All operations in one call!
+        // This single operation does:
+        // - Resize to 640x640
+        // - BGR → RGB color conversion
+        // - Normalize (/255)
+        // - HWC → CHW layout conversion
+        // - uint8 → float32 type conversion
+        // All written directly to input_mem (via output_tensor)!
+        
         (*preprocess_op)(
             stream,
-            input_tensor,       // Input: BGR uint8 NHWC
-            output_tensor,      // Output: RGB float32 NCHW
-            {640, 640},         // resize_dim
-            NVCV_INTERP_LINEAR, // interpolation
-            {0, 0, 640, 640},   // crop_rect (x, y, w, h)
+            input_tensor,          // Input: BGR uint8 NHWC from camera
+            output_tensor,         // Output: RGB float32 NCHW in input_mem
+            {640, 640},            // Resize dimensions
+            NVCV_INTERP_LINEAR,    // Bilinear interpolation
+            {0, 0, 640, 640},      // Crop rect (no crop, use full image)
             NVCV_CHANNEL_REVERSE,  // BGR → RGB
-            1.0f / 255.0f,      // scale
-            0.0f                // offset
+            1.0f / 255.0f,         // Scale for normalization
+            0.0f                   // Offset for normalization
         );
     }
     
-    // Data is now in input_mem (TensorRT buffer), ready for inference!
+    // Result is now in input_mem, ready for TensorRT!
 }
 
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
-    // std::vector<float> input;
-    // {
-    //     nvtx3::scoped_range r{"preprocess"};
-    //     input = preprocess(img); 
-    // }
-    
-    // GPU preprocessing
-    preprocess_gpu(img);
+    // ============================================
+    // Step 1: Preprocess on GPU
+    // ============================================
+    preprocess_gpu(img);  // Writes to input_mem
 
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
     
-    // {
-    //     nvtx3::scoped_range r{"H2D_memcpy"};
-    //     cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
-    // }
-    
+    // ============================================
+    // Step 2: Run TensorRT inference
+    // ============================================
     {
         nvtx3::scoped_range r{"inference"};
-        context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
+        context->setTensorAddress(INPUT_BLOB_NAME, input_mem);   // Already has preprocessed data!
         context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
         context->enqueueV3(stream);
     }
 
+    // ============================================
+    // Step 3: Copy results back to CPU
+    // ============================================
     {   
         nvtx3::scoped_range r{"D2H_memcpy"};
-        cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, 
+                       cudaMemcpyDeviceToHost, stream);
     }
 
     {
@@ -226,13 +253,14 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold)
         cudaStreamSynchronize(stream);
     }
     
+    // ============================================
+    // Step 4: Parse detections
+    // ============================================
     nvtx3::scoped_range r{"postprocess"};
     std::vector<Detection> results;
 
     for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
-        
         int offset = i * 6;
-
         float conf = output[offset+4];
 
         if (conf < threshold) break;
@@ -241,7 +269,6 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold)
         float y = output[offset+1];
         float w = output[offset+2];
         float h = output[offset+3];
-
         int label = (int)output[offset+5];
 
         Detection det;
