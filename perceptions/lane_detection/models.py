@@ -3,7 +3,7 @@ from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
 
 from config import D_MAX
-from scipy.spatial import ckdtree
+from scipy.spatial import cKDTree
 import numpy.typing as npt
 
 # Type definitions for clarity
@@ -49,7 +49,7 @@ class LaneCandidate:
 
     # 3. Geometric State
     # Persists the 'Fixed' matchings
-    matchings: MatchingSet
+    matchings: MatchingSet = field(default_factory=MatchingSet)
 
     # 4. Validity Flags
     is_valid: bool = True
@@ -75,7 +75,7 @@ class GlobalContext:
         num_points = len(self.map_points)
         adj = {i: [] for i in range(num_points)}
 
-        tree = ckdtree(self.map_points)
+        tree = cKDTree(self.map_points)
 
         # output is a set of tuples {(i, j), ...} where i < j
         pairs = tree.query_pairs(r=D_MAX)
