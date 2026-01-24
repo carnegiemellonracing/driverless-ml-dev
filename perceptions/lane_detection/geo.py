@@ -1,7 +1,8 @@
 import numpy as np
 from typing import List, Tuple
-from models import Point, Lane, LaneCandidate, GlobalContext
+from models import Point, Lane, LaneCandidate, GlobalContext, MatchingSet
 import math
+from config import W_MIN, W_MAX
 
 
 """
@@ -265,6 +266,149 @@ def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
 
     return True
 
+
+def C_width(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
+    """Verifies the Width Consistency constraint (C_width).
+
+    Ensures that the lane width falls within the acceptable bounds [W_MIN, W_MAX].
+    Uses the online lane width calculation algorithm to compute min/max widths.
+
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: GlobalContext with the map points.
+
+    Returns:
+        True if the width constraint is satisfied, False otherwise.
+    """
+    # Use online_lane_width to compute the min and max widths
+    _, min_width, max_width = online_lane_width(context, lane_candidate)
+    
+    # Check if both min and max widths are within acceptable bounds
+    return W_MIN <= min_width and max_width <= W_MAX
+
+
+def online_lane_width(
+    ctx: GlobalContext, candidate: LaneCandidate
+) -> Tuple[MatchingSet, float, float]:
+    """
+    Implements Algorithm 3 (Online Lane Width Calculation).
+    Returns (new_matching_set, min_width, max_width).
+
+    This function computes matching points between left and right boundaries
+    and calculates the minimum and maximum lane widths.
+
+    Matchings are tuples of (distance, l_param, r_param) where:
+    - distance: the width at this matching point
+    - l_param: parameter along left path (integer = vertex, fractional = on segment)
+    - r_param: parameter along right path (integer = vertex, fractional = on segment)
+    """
+    l_path = candidate.left_path
+    r_path = candidate.right_path
+    matchings = candidate.matchings
+
+    # 1. Start scanning from the last fixed index
+    start_l = matchings.last_fixed_l_idx
+    start_r = matchings.last_fixed_r_idx
+
+    # Get the maximum parameter values (end of each path)
+    max_l_param = float(len(l_path) - 1)
+    max_r_param = float(len(r_path) - 1)
+
+    # We will collect ALL matchings (Equation 11) starting from here
+    # Each matching is (distance, l_param, r_param)
+    new_matchings = []
+
+    # Get actual points from indices (for the portion we're computing)
+    left_points = [ctx.map_points[idx] for idx in l_path[start_l:]]
+    right_points = [ctx.map_points[idx] for idx in r_path[start_r:]]
+
+    # 2. Compute Matchings (Union of Point-to-Seg and Seg-to-Seg) per Equation 11
+
+    # 2a. Left vertices to right segments (k=0, s=0)
+    for i, l_point in enumerate(left_points):
+        l_param = float(start_l + i)
+        for j in range(len(right_points) - 1):
+            r_seg_start = right_points[j]
+            r_seg_end = right_points[j + 1]
+            dist, t = point_to_segment_distance(l_point, r_seg_start, r_seg_end)
+            r_param = float(start_r + j) + t
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2b. Right vertices to left segments (k=0, s=1)
+    for j, r_point in enumerate(right_points):
+        r_param = float(start_r + j)
+        for i in range(len(left_points) - 1):
+            l_seg_start = left_points[i]
+            l_seg_end = left_points[i + 1]
+            dist, t = point_to_segment_distance(r_point, l_seg_start, l_seg_end)
+            l_param = float(start_l + i) + t
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2c. Segment-to-segment distances (k=1)
+    for i in range(len(left_points) - 1):
+        for j in range(len(right_points) - 1):
+            l_seg_start = left_points[i]
+            l_seg_end = left_points[i + 1]
+            r_seg_start = right_points[j]
+            r_seg_end = right_points[j + 1]
+            dist, t_l, t_r = segment_to_segment_distance(
+                l_seg_start, l_seg_end, r_seg_start, r_seg_end
+            )
+            l_param = float(start_l + i) + t_l
+            r_param = float(start_r + j) + t_r
+            new_matchings.append((dist, l_param, r_param))
+
+    # 3. Sort matchings lexicographically by (l_param, r_param)
+    new_matchings.sort(key=lambda m: (m[1], m[2]))
+
+    # 4. Split into Fixed and Mutable (Algorithm 3, line 9)
+    # "All matching points which come before the first matching point
+    # that matches at least one end of either boundary are fixed."
+    # A matching is at an "end" if l_param >= max_l_param or r_param >= max_r_param
+
+    split_idx = len(new_matchings)  # Default: all fixed
+    for k, (dist, l_param, r_param) in enumerate(new_matchings):
+        # Check if this matching involves an endpoint (with small epsilon for float comparison)
+        if l_param >= max_l_param - 1e-9 or r_param >= max_r_param - 1e-9:
+            split_idx = k
+            break
+
+    # Split the new matchings
+    fixed_new = new_matchings[:split_idx]
+    mutable_new = new_matchings[split_idx:]
+
+    # 5. Create updated MatchingSet
+    # Combine previously fixed indices/widths with newly fixed ones
+    new_fixed_indices = matchings.fixed_indices + [
+        (int(np.floor(m[1])), int(np.floor(m[2]))) for m in fixed_new
+    ]
+    new_fixed_widths = matchings.fixed_widths + [m[0] for m in fixed_new]
+
+    # Update last fixed indices if we have new fixed matchings
+    if fixed_new:
+        last_fixed_l = int(np.floor(fixed_new[-1][1]))
+        last_fixed_r = int(np.floor(fixed_new[-1][2]))
+    else:
+        last_fixed_l = matchings.last_fixed_l_idx
+        last_fixed_r = matchings.last_fixed_r_idx
+
+    updated_matchings = MatchingSet(
+        fixed_indices=new_fixed_indices,
+        fixed_widths=new_fixed_widths,
+        last_fixed_l_idx=last_fixed_l,
+        last_fixed_r_idx=last_fixed_r,
+    )
+
+    # 6. Compute min/max from all widths (fixed + mutable)
+    all_widths = new_fixed_widths + [m[0] for m in mutable_new]
+    if not all_widths:
+        # No widths computed - return safe defaults
+        return updated_matchings, W_MIN + 1.0, W_MIN + 1.0
+
+    min_w = min(all_widths)
+    max_w = max(all_widths)
+
+    return updated_matchings, min_w, max_w
 
 # def compute_matchings(
 #     left: Lane, right: Lane, start_u: float, start_v: float
