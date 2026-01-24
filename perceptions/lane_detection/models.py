@@ -1,3 +1,4 @@
+from enum import Enum
 import numpy as np
 from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
@@ -7,6 +8,11 @@ import numpy.typing as npt
 Point = Annotated[npt.NDArray[np.float64], Literal[2]]
 Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
 Lane = List[Point]  # A lane is a list of points
+
+
+class Side(Enum):
+    LEFT = "left"
+    RIGHT = "right"
 
 
 @dataclass
