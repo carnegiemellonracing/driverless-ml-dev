@@ -1,13 +1,14 @@
 import numpy as np
-from typing import List, Tuple, Dict, Set
+from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
 
 from perceptions.lane_detection.config import D_MAX
-from scipy.spatial import cKDtree
+from scipy.spatial import ckdtree
+import numpy.typing as npt
 
 # Type definitions for clarity
-Point = np.ndarray[(2,)]
-Map = np.ndarray[(2, int)]
+Point = Annotated[npt.NDArray[np.float64], Literal[2, 1]]
+Map = Annotated[npt.NDArray[np.float64], Literal[2, ...]]
 
 
 @dataclass
@@ -73,7 +74,7 @@ class GlobalContext:
         num_points = len(self.map_points)
         adj = {i: [] for i in range(num_points)}
 
-        tree = cKDtree(self.map_points)
+        tree = ckdtree(self.map_points)
 
         # output is a set of tuples {(i, j), ...} where i < j
         pairs = tree.query_pairs(r=D_MAX)
