@@ -1,8 +1,9 @@
 import unittest
 import numpy as np
-from geo import C_seg, C_poly, C_width, find_starting_vertices, next_vertex_decider
-from models import LaneCandidate, PerceptualFieldContext
-from config import W_MIN, W_MAX
+from perceptions.lane_detection.geo import C_seg, C_poly, C_width, find_starting_vertices
+from perceptions.lane_detection.deciders import next_vertex_decider
+from perceptions.lane_detection.models import LaneCandidate, PerceptualFieldContext
+from perceptions.lane_detection.config import W_MIN, W_MAX
 import math
 
 

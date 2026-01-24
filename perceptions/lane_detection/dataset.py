@@ -1,8 +1,8 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-from geo import enumerate_path_pairs_v2
-from data_loader import generate_perceptual_field_data, load_yaml_data
+from perceptions.lane_detection.geo import enumerate_path_pairs_v2
+from perceptions.lane_detection.data_loader import generate_perceptual_field_data, load_yaml_data
 import math
 import os
 

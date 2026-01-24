@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple, List
-from models import Point, Map, Graph, LaneCandidate, PerceptualFieldContext, MatchingSet
-from config import W_MIN, W_MAX
+from perceptions.lane_detection.models import Point, Map, Graph, LaneCandidate, PerceptualFieldContext, MatchingSet
+from perceptions.lane_detection.config import W_MIN, W_MAX
 
 
 """
