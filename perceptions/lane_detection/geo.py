@@ -1,5 +1,18 @@
 import numpy as np
+from typing import List, Tuple
+from models import Point, Lane, LaneCandidate, GlobalContext
 import math
+
+
+"""
+UTILS
+"""
+
+
+def within_range(point, car_pos, perceptual_field):
+    if (
+        np.linalg.norm(car_pos - point) <= perceptual_field
+    ):  # TODO for this and similar inequalities, do we want strict or equal
 from typing import List, Tuple, Dict, Set, Optional
 
 # Import dataclasses and config from models
@@ -46,23 +59,41 @@ def within_cone(point, car_pos, heading, cone_angle):
     """Checks if a point is within the car's field of view cone."""
     if np.array_equal(point, car_pos):
         return True
-        
-    v_point = point - car_pos
-    v_heading = np.array([np.cos(heading), np.sin(heading)])
+    return False
     
-    norm_point = np.linalg.norm(v_point)
-    if norm_point == 0:
+def within_cone(point: np.ndarray, car_pos: np.ndarray, heading_rad: float, cone_angle_rad: float) -> bool:
+    """
+    Checks if the given coordinates are within the "cone" around car heading with angle cone_angle and starting at (mid_x, mid_y)
+    Compares angle formed by the slope of coordinates (relative to (mid_x, mid_y)) to car heading
+    """
+    relative_pt = point - car_pos
+    car = np.array([np.cos(heading_rad), math.sin(heading_rad)])
+    ip = np.dot(relative_pt, car)
+
+    rounded = min(1, max(-1, ip / (np.linalg.norm(relative_pt) * np.linalg.norm(car))))
+    
+    theta = math.acos(rounded)
+    
+    if theta <= cone_angle_rad / 2:
         return True
-        
     # Calculate angle between heading vector and point vector
     dot = np.clip(np.dot(v_point / norm_point, v_heading), -1.0, 1.0)
     angle = np.arccos(dot)
-    
     return angle <= (cone_angle / 2)
 
 
-def calculate_segment_angle(p1, p2, p3):
-    """Calculates the absolute deflection angle between two consecutive segments."""
+def get_segment_angle(p1: Point, p2: Point, p3: Point) -> float:
+    """Calculates the absolute deflection angle between two consecutive segments.
+
+    Args:
+        p1: Start point of the first segment.
+        p2: End point of the first segment / Start point of the second segment.
+        p3: End point of the second segment.
+
+    Returns:
+        The angle in degrees between the two segments. 0.0 indicates a straight line,
+        90.0 indicates a right angle turn.
+    """
     v1 = p2 - p1
     v2 = p3 - p2
 
@@ -314,87 +345,106 @@ def OnlineLW(left_path: List[int], right_path: List[int], points,
         prev_matching = MatchingSet()
         u_s, v_s = 0, 0
     else:
-        u_s = prev_matching.last_fixed_l_idx
-        v_s = prev_matching.last_fixed_r_idx
-
-    # Start with previous fixed matchings
-    new_fixed_indices = list(prev_matching.fixed_indices)
-    new_fixed_widths = list(prev_matching.fixed_widths)
-
-    # Compute new matches starting from last fixed position
-    l_indices = range(u_s, len(left_path))
-    r_indices = range(v_s, len(right_path))
-    
-    if not l_indices or not r_indices:
-        return MatchingSet(
-            fixed_indices=new_fixed_indices,
-            fixed_widths=new_fixed_widths,
-            last_fixed_l_idx=u_s,
-            last_fixed_r_idx=v_s
-        )
-
-    new_matches = []
-    
-    # Greedy nearest-neighbor matching
-    for i in l_indices:
-        best_j = -1
-        min_d = float("inf")
-        for j in r_indices:
-            d = np.linalg.norm(np.array(points[left_path[i]]) - np.array(points[right_path[j]]))
-            if d < min_d:
-                min_d = d
-                best_j = j
-        if best_j != -1:
-            new_matches.append(((i, best_j), min_d))
-            
-    # Sort by left index
-    new_matches.sort(key=lambda x: (x[0][0], x[0][1]))
-    
-    # Split into fixed and mutable
-    # Matches not at endpoints are "fixed"
-    max_u = len(left_path) - 1
-    max_v = len(right_path) - 1
-    
-    last_l_idx = u_s
-    last_r_idx = v_s
-    
-    for (u, v), width in new_matches:
-        if u < max_u and v < max_v:
-            # This match is fixed (not at boundary)
-            new_fixed_indices.append((u, v))
-            new_fixed_widths.append(width)
-            last_l_idx = max(last_l_idx, u + 1)
-            last_r_idx = max(last_r_idx, v + 1)
-    
-    # Deduplicate
-    seen = set()
-    deduped_indices = []
-    deduped_widths = []
-    for idx, w in zip(new_fixed_indices, new_fixed_widths):
-        if idx not in seen:
-            seen.add(idx)
-            deduped_indices.append(idx)
-            deduped_widths.append(w)
-    
-    return MatchingSet(
-        fixed_indices=deduped_indices,
-        fixed_widths=deduped_widths,
-        last_fixed_l_idx=last_l_idx,
-        last_fixed_r_idx=last_r_idx
-    )
+        return d4, t_s1_2, 1.0
 
 
-def C_seg(boundary, points, max_angle=PHI_MAX):
-    """Segment Consistency Constraint."""
-    for i in range(len(boundary) - 2):
-        p1 = points[boundary[i]]
-        p2 = points[boundary[i + 1]]
-        p3 = points[boundary[i + 2]]
-        if calculate_segment_angle(p1, p2, p3) > max_angle:
+def get_point_at_param(
+    lane_candidate: LaneCandidate, context: GlobalContext, t: float, side: str = "left"
+) -> Point:
+    """Interpolates a point on the lane at parameter t (Eq 7/8).
+
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths
+        context: GlobalContext with the map points
+        t: Parameter value for interpolation
+        side: Which boundary to interpolate ("left" or "right")
+
+    Returns:
+        Interpolated point on the specified boundary
+    """
+    # Select the appropriate path based on side
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+
+    i = int(np.floor(t))
+    lam = t - i
+
+    # Clamp to end
+    if i >= len(path) - 1:
+        return context.map_points[path[-1]]
+
+    # Get the actual points from the global map using indices
+    p_i = context.map_points[path[i]]
+    p_next = context.map_points[path[i + 1]]
+
+    # P(i + lambda) = (1 - lambda)p_i + lambda * p_next
+    return (1.0 - lam) * p_i + lam * p_next
+
+
+"""
+MAIN FUNCTIONS
+"""
+
+
+def C_seg(
+    lane_candidate: LaneCandidate,
+    context: GlobalContext,
+    side: str = "left",
+    max_angle: float = 90.0,
+) -> bool:
+    """Verifies the Segment Consistency constraint (C_seg) for a LaneCandidate.
+
+    Ensures that the absolute angle between any two consecutive line segments
+    does not exceed `max_angle`.
+
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: GlobalContext with the map points.
+        side: Which boundary to check ("left" or "right").
+        max_angle: Maximum allowable angle in degrees.
+
+    Returns:
+        True if the constraint is satisfied, False otherwise.
+    """
+    # Get the path indices based on side
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+
+    if len(path) < 3:
+        return True
+
+    # Check angles between consecutive segments
+    for i in range(len(path) - 2):
+        p1 = context.map_points[path[i]]
+        p2 = context.map_points[path[i + 1]]
+        p3 = context.map_points[path[i + 2]]
+
+        if get_segment_angle(p1, p2, p3) > max_angle:
             return False
     return True
 
 
+def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
+    """Verifies the Polynomial Consistency constraint (C_poly) for a LaneCandidate.
+
+    Ensures that the polygon formed by the left and right boundaries does not
+    intersect itself. The polygon is constructed by concatenating the left
+    boundary with the reversed right boundary.
+
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: GlobalContext with the map points.
+
+    Returns:
+        True if the polygon is simple (no self-intersections), False otherwise.
+    """
+    # Convert paths to actual points
+    left_points = [context.map_points[idx] for idx in lane_candidate.left_path]
+    right_points = [context.map_points[idx] for idx in lane_candidate.right_path]
+
+    # Construct polygon by concatenating left with reversed right
+    poly_points = left_points + right_points[::-1]
+    n = len(poly_points)
+
+    if n < 4:
 def C_poly(left_path, right_path, points):
     """Polygon Consistency Constraint."""
     if len(left_path) < 2 or len(right_path) < 2:
@@ -405,6 +455,10 @@ def C_poly(left_path, right_path, points):
     n = len(polygon_points)
 
     for i in range(n):
+        p1 = poly_points[i]
+        p2 = poly_points[(i + 1) % n]
+
+        # Check against all other segments, skipping adjacent ones
         for j in range(i + 2, n):
             if j == (i + 1) % n or i == (j + 1) % n:
                 continue

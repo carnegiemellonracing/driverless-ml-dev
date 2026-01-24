@@ -1,13 +1,14 @@
 import numpy as np
-from typing import List, Tuple, Dict, Set
+from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
 
 from perceptions.lane_detection.config import D_MAX
-from scipy.spatial import cKDTree
+from scipy.spatial import cKDtree
 
 # Type definitions for clarity
-Point = np.ndarray[(2,)]
-Map = np.ndarray[(2, int)]
+Point = Annotated[npt.NDArray[np.float64], Literal[2]]
+Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
+Lane = List[Point]  # A lane is a list of points
 
 
 @dataclass
@@ -47,7 +48,7 @@ class LaneCandidate:
 
     # 3. Geometric State
     # Persists the 'Fixed' matchings
-    matchings: MatchingSet
+    matchings: MatchingSet = field(default_factory=MatchingSet)
 
     # 4. Validity Flags
     is_valid: bool = True
