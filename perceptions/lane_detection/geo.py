@@ -147,25 +147,22 @@ def segment_to_segment_distance(
 
 
 def get_point_at_param(
-    lane_candidate: LaneCandidate,
-    context: GlobalContext,
-    t: float,
-    side: str = "left"
+    lane_candidate: LaneCandidate, context: GlobalContext, t: float, side: str = "left"
 ) -> Point:
     """Interpolates a point on the lane at parameter t (Eq 7/8).
-    
+
     Args:
         lane_candidate: The LaneCandidate containing left and right paths
         context: GlobalContext with the map points
         t: Parameter value for interpolation
         side: Which boundary to interpolate ("left" or "right")
-    
+
     Returns:
         Interpolated point on the specified boundary
     """
     # Select the appropriate path based on side
     path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
-    
+
     i = int(np.floor(t))
     lam = t - i
 
@@ -186,44 +183,64 @@ MAIN FUNCTIONS
 """
 
 
-def C_seg(boundary: Lane, max_angle: float = 90.0) -> bool:
-    """Verifies the Segment Consistency constraint (C_seg).
+def C_seg(
+    lane_candidate: LaneCandidate,
+    context: GlobalContext,
+    side: str = "left",
+    max_angle: float = 90.0,
+) -> bool:
+    """Verifies the Segment Consistency constraint (C_seg) for a LaneCandidate.
 
     Ensures that the absolute angle between any two consecutive line segments
     does not exceed `max_angle`.
 
     Args:
-        boundary: List of points defining the lane boundary.
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: GlobalContext with the map points.
+        side: Which boundary to check ("left" or "right").
         max_angle: Maximum allowable angle in degrees.
 
     Returns:
         True if the constraint is satisfied, False otherwise.
     """
-    if len(boundary) < 3:
+    # Get the path indices based on side
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+
+    if len(path) < 3:
         return True
 
-    for i in range(len(boundary) - 2):
-        if get_segment_angle(boundary[i], boundary[i + 1], boundary[i + 2]) > max_angle:
+    # Check angles between consecutive segments
+    for i in range(len(path) - 2):
+        p1 = context.map_points[path[i]]
+        p2 = context.map_points[path[i + 1]]
+        p3 = context.map_points[path[i + 2]]
+
+        if get_segment_angle(p1, p2, p3) > max_angle:
             return False
 
     return True
 
 
-def C_poly(left: Lane, right: Lane) -> bool:
-    """Verifies the Polynomial Consistency constraint (C_poly).
+def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
+    """Verifies the Polynomial Consistency constraint (C_poly) for a LaneCandidate.
 
     Ensures that the polygon formed by the left and right boundaries does not
     intersect itself. The polygon is constructed by concatenating the left
     boundary with the reversed right boundary.
 
     Args:
-        left: List of points defining the left boundary.
-        right: List of points defining the right boundary.
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: GlobalContext with the map points.
 
     Returns:
         True if the polygon is simple (no self-intersections), False otherwise.
     """
-    poly_points = left + right[::-1]
+    # Convert paths to actual points
+    left_points = [context.map_points[idx] for idx in lane_candidate.left_path]
+    right_points = [context.map_points[idx] for idx in lane_candidate.right_path]
+
+    # Construct polygon by concatenating left with reversed right
+    poly_points = left_points + right_points[::-1]
     n = len(poly_points)
 
     if n < 4:
@@ -235,11 +252,6 @@ def C_poly(left: Lane, right: Lane) -> bool:
         p2 = poly_points[(i + 1) % n]
 
         # Check against all other segments, skipping adjacent ones
-        # Adjacent segments: (i-1, i) and (i+1, i+2)
-        # We start checking from i+2.
-        # We stop at n-1 (to avoid checking last segment against first if they are adjacent,
-        # but here (n-1, 0) is adjacent to (0, 1) so we stop at n-2 effectively for i=0).
-
         for j in range(i + 2, n):
             # If we are at the last segment (n-1, 0), we shouldn't check against (0, 1)
             if i == 0 and j == n - 1:
