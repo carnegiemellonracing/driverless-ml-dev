@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Tuple
-from models import Point, Lane, LaneCandidate, GlobalContext, MatchingSet
+from models import Point, Lane, LaneCandidate, PerceptualFieldContext, MatchingSet
 import math
 from config import W_MIN, W_MAX
 
@@ -148,13 +148,13 @@ def segment_to_segment_distance(
 
 
 def get_point_at_param(
-    lane_candidate: LaneCandidate, context: GlobalContext, t: float, side: str = "left"
+    lane_candidate: LaneCandidate, context: PerceptualFieldContext, t: float, side: str = "left"
 ) -> Point:
     """Interpolates a point on the lane at parameter t (Eq 7/8).
 
     Args:
         lane_candidate: The LaneCandidate containing left and right paths
-        context: GlobalContext with the map points
+        context: PerceptualFieldContext with the visible points
         t: Parameter value for interpolation
         side: Which boundary to interpolate ("left" or "right")
 
@@ -169,11 +169,11 @@ def get_point_at_param(
 
     # Clamp to end
     if i >= len(path) - 1:
-        return context.map_points[path[-1]]
+        return context.get_point(path[-1])
 
-    # Get the actual points from the global map using indices
-    p_i = context.map_points[path[i]]
-    p_next = context.map_points[path[i + 1]]
+    # Get the actual points using global indices
+    p_i = context.get_point(path[i])
+    p_next = context.get_point(path[i + 1])
 
     # P(i + lambda) = (1 - lambda)p_i + lambda * p_next
     return (1.0 - lam) * p_i + lam * p_next
@@ -186,7 +186,7 @@ MAIN FUNCTIONS
 
 def C_seg(
     lane_candidate: LaneCandidate,
-    context: GlobalContext,
+    context: PerceptualFieldContext,
     side: str = "left",
     max_angle: float = 90.0,
 ) -> bool:
@@ -197,7 +197,7 @@ def C_seg(
 
     Args:
         lane_candidate: The LaneCandidate containing left and right paths.
-        context: GlobalContext with the map points.
+        context: PerceptualFieldContext with the visible points.
         side: Which boundary to check ("left" or "right").
         max_angle: Maximum allowable angle in degrees.
 
@@ -212,9 +212,9 @@ def C_seg(
 
     # Check angles between consecutive segments
     for i in range(len(path) - 2):
-        p1 = context.map_points[path[i]]
-        p2 = context.map_points[path[i + 1]]
-        p3 = context.map_points[path[i + 2]]
+        p1 = context.get_point(path[i])
+        p2 = context.get_point(path[i + 1])
+        p3 = context.get_point(path[i + 2])
 
         if get_segment_angle(p1, p2, p3) > max_angle:
             return False
@@ -222,7 +222,7 @@ def C_seg(
     return True
 
 
-def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
+def C_poly(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
     """Verifies the Polynomial Consistency constraint (C_poly) for a LaneCandidate.
 
     Ensures that the polygon formed by the left and right boundaries does not
@@ -231,14 +231,14 @@ def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
 
     Args:
         lane_candidate: The LaneCandidate containing left and right paths.
-        context: GlobalContext with the map points.
+        context: PerceptualFieldContext with the visible points.
 
     Returns:
         True if the polygon is simple (no self-intersections), False otherwise.
     """
     # Convert paths to actual points
-    left_points = [context.map_points[idx] for idx in lane_candidate.left_path]
-    right_points = [context.map_points[idx] for idx in lane_candidate.right_path]
+    left_points = [context.get_point(idx) for idx in lane_candidate.left_path]
+    right_points = [context.get_point(idx) for idx in lane_candidate.right_path]
 
     # Construct polygon by concatenating left with reversed right
     poly_points = left_points + right_points[::-1]
@@ -267,7 +267,7 @@ def C_poly(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
     return True
 
 
-def C_width(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
+def C_width(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
     """Verifies the Width Consistency constraint (C_width).
 
     Ensures that the lane width falls within the acceptable bounds [W_MIN, W_MAX].
@@ -275,20 +275,20 @@ def C_width(lane_candidate: LaneCandidate, context: GlobalContext) -> bool:
 
     Args:
         lane_candidate: The LaneCandidate containing left and right paths.
-        context: GlobalContext with the map points.
+        context: PerceptualFieldContext with the visible points.
 
     Returns:
         True if the width constraint is satisfied, False otherwise.
     """
     # Use online_lane_width to compute the min and max widths
     _, min_width, max_width = online_lane_width(context, lane_candidate)
-    
+
     # Check if both min and max widths are within acceptable bounds
     return W_MIN <= min_width and max_width <= W_MAX
 
 
 def online_lane_width(
-    ctx: GlobalContext, candidate: LaneCandidate
+    ctx: PerceptualFieldContext, candidate: LaneCandidate
 ) -> Tuple[MatchingSet, float, float]:
     """
     Implements Algorithm 3 (Online Lane Width Calculation).
@@ -319,8 +319,8 @@ def online_lane_width(
     new_matchings = []
 
     # Get actual points from indices (for the portion we're computing)
-    left_points = [ctx.map_points[idx] for idx in l_path[start_l:]]
-    right_points = [ctx.map_points[idx] for idx in r_path[start_r:]]
+    left_points = [ctx.get_point(idx) for idx in l_path[start_l:]]
+    right_points = [ctx.get_point(idx) for idx in r_path[start_r:]]
 
     # 2. Compute Matchings (Union of Point-to-Seg and Seg-to-Seg) per Equation 11
 
