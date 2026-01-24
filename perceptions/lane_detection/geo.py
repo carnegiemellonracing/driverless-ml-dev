@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Tuple
-from models import Point, Lane, LaneCandidate, GlobalContext
+from models import Point, Lane, Map, Graph, LaneCandidate, GlobalContext
 import math
 
 
@@ -252,6 +252,83 @@ def C_poly(left: Lane, right: Lane) -> bool:
                 return False
 
     return True
+
+
+def find_starting_vertices(graph: Graph, cone_map: Map, car_pos: Point, car_heading_rad: float, max_range = 2) -> tuple[int, int]:
+    """Selects two staring vertices from a graph to form the beginning of left and right lane candidates
+
+    Given the car pose in the map coordinate system, the two starting vertices sl,sr ∈ V have to be close to the car,
+    thus we conduct a search within a maximum radius such as 2m. Additionally, the left starting vertex must have a positive
+    angle, the right a negative angle relative to the car heading vector. From multiple pairs that meet these criteria, we select
+    the one that is the most symmetrical with respect to the line defined by the position and direction vector of the car.
+
+    Args:
+        graph: Perceptual field graph.
+        car_pos: Position of car within perceptual field.
+        car_heading_rad: Heading of car in radians.
+        max_range: Maximum range to search for starting points in meters
+
+    Returns:
+        Left and right starting points INDICES, or None if not found
+    """
+    # Step 1: Filter points within max_range
+    candidates_within_range = []
+    for idx in graph.keys():
+        point = cone_map[idx]
+        if within_range(point, car_pos, max_range):
+            candidates_within_range.append((idx, point))
+    
+    if not candidates_within_range:
+        return (None, None)
+    
+    # Step 2: Compute angles relative to car heading and classify as left/right
+    car_heading_vec = np.array([np.cos(car_heading_rad), np.sin(car_heading_rad)])
+    
+    left_candidates = []   # Points with positive angle (left of heading)
+    right_candidates = []  # Points with negative angle (right of heading)
+    
+    for idx, point in candidates_within_range:
+        # Vector from car to point
+        vec_to_point = point - car_pos
+        norm_vec = np.linalg.norm(vec_to_point)
+        
+        if norm_vec == 0:
+            continue
+        
+        # Normalize
+        vec_to_point_u = vec_to_point / norm_vec
+        
+        # Compute signed angle using cross product and dot product
+        # cross = v1.x * v2.y - v1.y * v2.x (gives sign)
+        # angle = atan2(cross, dot)
+        cross = car_heading_vec[0] * vec_to_point_u[1] - car_heading_vec[1] * vec_to_point_u[0]
+        dot = np.dot(car_heading_vec, vec_to_point_u)
+        angle = np.arctan2(cross, dot)
+        
+        if angle > 0:
+            left_candidates.append((idx, angle))
+        elif angle < 0:
+            right_candidates.append((idx, angle))
+    
+    if not left_candidates or not right_candidates:
+        return (None, None)
+    
+    # Step 3: Find the most symmetrical pair
+    # Symmetry is measured as how close the absolute angles are (minimize |angle_l + angle_r|)
+    best_symmetry = float('inf')
+    best_pair = (None, None)
+    
+    for idx_l, angle_l in left_candidates:
+        for idx_r, angle_r in right_candidates:
+            # Symmetry: minimize |angle_l + angle_r|
+            # (A symmetrical pair has angle_l ≈ -angle_r)
+            symmetry = abs(angle_l + angle_r)
+            if symmetry < best_symmetry:
+                best_symmetry = symmetry
+                best_pair = (idx_l, idx_r)
+    
+    return best_pair
+
 
 
 # def compute_matchings(

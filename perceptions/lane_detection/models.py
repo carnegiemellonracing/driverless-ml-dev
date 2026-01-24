@@ -10,7 +10,7 @@ import numpy.typing as npt
 Point = Annotated[npt.NDArray[np.float64], Literal[2]]
 Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
 Lane = List[Point]  # A lane is a list of points
-
+Graph = Dict[int, List[int]]
 
 @dataclass
 class MatchingSet:
@@ -65,13 +65,13 @@ class GlobalContext:
 
         # Adjacency list: graph[i] -> [neighbor_idx_1, neighbor_idx_2, ...]
         # Edges exist if dist < D_MAX.
-        self.adj_list: Dict[int, List[int]] = self._build_graph()
+        self.adj_list: Graph = self._build_graph()
 
         # Key: (prev_idx, curr_idx) -> Representing the incoming vector.
         # Value: List[int] -> Neighbors sorted by NVD score (smallest angle deviation).
         self.nvd_cache: Dict[Tuple[int, int], List[int]] = {}
 
-    def _build_graph(self) -> Dict[int, List[int]]:
+    def _build_graph(self) -> Graph:
         num_points = len(self.map_points)
         adj = {i: [] for i in range(num_points)}
 
