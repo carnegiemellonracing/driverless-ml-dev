@@ -59,8 +59,8 @@ class PerceptualFieldContext:
     Used for training and inference on lane detection.
     """
 
-    # Reference to the FULL cone map (shared across all contexts from same map)
-    cone_map: np.ndarray
+    # Reference to the full cone map (shared across all contexts from same map)
+    cone_map: Map  # Shape: (N, 2) where N is number of cones
 
     # Which global indices are visible in this perceptual field
     visible_indices: Set[int]
@@ -69,7 +69,7 @@ class PerceptualFieldContext:
     adj_list: Dict[int, List[int]]
 
     # Car state
-    car_pos: np.ndarray
+    car_pos: Point
     car_heading: float
 
     # Optional: NVD cache for neighbor sorting during path enumeration
