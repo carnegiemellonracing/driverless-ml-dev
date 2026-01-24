@@ -1,9 +1,7 @@
+from enum import Enum
 import numpy as np
 from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
-
-from config import D_MAX
-from scipy.spatial import ckdtree
 import numpy.typing as npt
 
 # Type definitions for clarity
@@ -11,6 +9,11 @@ Point = Annotated[npt.NDArray[np.float64], Literal[2]]
 Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
 Lane = List[Point]  # A lane is a list of points
 Graph = Dict[int, List[int]]
+
+class Side(Enum):
+    LEFT = "left"
+    RIGHT = "right"
+
 
 @dataclass
 class MatchingSet:
@@ -49,39 +52,39 @@ class LaneCandidate:
 
     # 3. Geometric State
     # Persists the 'Fixed' matchings
-    matchings: MatchingSet
+    matchings: MatchingSet = field(default_factory=MatchingSet)
 
     # 4. Validity Flags
     is_valid: bool = True
 
 
-class GlobalContext:
+@dataclass
+class PerceptualFieldContext:
     """
-    Holds read-only data including array of points, graph, and NVD cache
+    Holds data for a single perceptual field (visible subset of map from car position).
+    Used for training and inference on lane detection.
     """
 
-    def __init__(self, map_points: np.ndarray[(2, int)]):
-        self.map_points: np.ndarray[(2, int)] = map_points  # The raw Nx2 array
+    # Reference to the full cone map (shared across all contexts from same map)
+    cone_map: Map  # Shape: (N, 2) where N is number of cones
 
-        # Adjacency list: graph[i] -> [neighbor_idx_1, neighbor_idx_2, ...]
-        # Edges exist if dist < D_MAX.
-        self.adj_list: Graph = self._build_graph()
+    # Which global indices are visible in this perceptual field
+    visible_indices: Set[int]
 
-        # Key: (prev_idx, curr_idx) -> Representing the incoming vector.
-        # Value: List[int] -> Neighbors sorted by NVD score (smallest angle deviation).
-        self.nvd_cache: Dict[Tuple[int, int], List[int]] = {}
+    # Subgraph adjacency (keys are GLOBAL indices from the original map)
+    adj_list: Dict[int, List[int]]
 
-    def _build_graph(self) -> Graph:
-        num_points = len(self.map_points)
-        adj = {i: [] for i in range(num_points)}
+    # Car state
+    car_pos: Point
+    car_heading: float
 
-        tree = ckdtree(self.map_points)
+    # Optional: NVD cache for neighbor sorting during path enumeration
+    nvd_cache: Dict[Tuple[int, int], List[int]] = field(default_factory=dict)
 
-        # output is a set of tuples {(i, j), ...} where i < j
-        pairs = tree.query_pairs(r=D_MAX)
+    def get_point(self, global_idx: int) -> np.ndarray:
+        """Get point coordinates by global index (direct access to shared map)."""
+        return self.cone_map[global_idx]
 
-        for i, j in pairs:
-            adj[i].append(j)
-            adj[j].append(i)
-
-        return adj
+    def has_point(self, global_idx: int) -> bool:
+        """Check if a global index is visible in this perceptual field."""
+        return global_idx in self.visible_indices

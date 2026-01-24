@@ -1,7 +1,8 @@
 import numpy as np
 from typing import List, Tuple
-from models import Point, Lane, Map, Graph, LaneCandidate, GlobalContext
+from models import Point, Lane, Map, Graph, LaneCandidate, PerceptualFieldContext, MatchingSet
 import math
+from config import W_MIN, W_MAX
 
 
 """
@@ -148,34 +149,34 @@ def segment_to_segment_distance(
 
 def get_point_at_param(
     lane_candidate: LaneCandidate,
-    context: GlobalContext,
+    context: PerceptualFieldContext,
     t: float,
-    side: str = "left"
+    side: str = "left",
 ) -> Point:
     """Interpolates a point on the lane at parameter t (Eq 7/8).
-    
+
     Args:
         lane_candidate: The LaneCandidate containing left and right paths
-        context: GlobalContext with the map points
+        context: PerceptualFieldContext with the visible points
         t: Parameter value for interpolation
         side: Which boundary to interpolate ("left" or "right")
-    
+
     Returns:
         Interpolated point on the specified boundary
     """
     # Select the appropriate path based on side
     path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
-    
+
     i = int(np.floor(t))
     lam = t - i
 
     # Clamp to end
     if i >= len(path) - 1:
-        return context.map_points[path[-1]]
+        return context.get_point(path[-1])
 
-    # Get the actual points from the global map using indices
-    p_i = context.map_points[path[i]]
-    p_next = context.map_points[path[i + 1]]
+    # Get the actual points using global indices
+    p_i = context.get_point(path[i])
+    p_next = context.get_point(path[i + 1])
 
     # P(i + lambda) = (1 - lambda)p_i + lambda * p_next
     return (1.0 - lam) * p_i + lam * p_next
@@ -186,44 +187,64 @@ MAIN FUNCTIONS
 """
 
 
-def C_seg(boundary: Lane, max_angle: float = 90.0) -> bool:
-    """Verifies the Segment Consistency constraint (C_seg).
+def C_seg(
+    lane_candidate: LaneCandidate,
+    context: PerceptualFieldContext,
+    side: str = "left",
+    max_angle: float = 90.0,
+) -> bool:
+    """Verifies the Segment Consistency constraint (C_seg) for a LaneCandidate.
 
     Ensures that the absolute angle between any two consecutive line segments
     does not exceed `max_angle`.
 
     Args:
-        boundary: List of points defining the lane boundary.
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: PerceptualFieldContext with the visible points.
+        side: Which boundary to check ("left" or "right").
         max_angle: Maximum allowable angle in degrees.
 
     Returns:
         True if the constraint is satisfied, False otherwise.
     """
-    if len(boundary) < 3:
+    # Get the path indices based on side
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+
+    if len(path) < 3:
         return True
 
-    for i in range(len(boundary) - 2):
-        if get_segment_angle(boundary[i], boundary[i + 1], boundary[i + 2]) > max_angle:
+    # Check angles between consecutive segments
+    for i in range(len(path) - 2):
+        p1 = context.get_point(path[i])
+        p2 = context.get_point(path[i + 1])
+        p3 = context.get_point(path[i + 2])
+
+        if get_segment_angle(p1, p2, p3) > max_angle:
             return False
 
     return True
 
 
-def C_poly(left: Lane, right: Lane) -> bool:
-    """Verifies the Polynomial Consistency constraint (C_poly).
+def C_poly(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
+    """Verifies the Polynomial Consistency constraint (C_poly) for a LaneCandidate.
 
     Ensures that the polygon formed by the left and right boundaries does not
     intersect itself. The polygon is constructed by concatenating the left
     boundary with the reversed right boundary.
 
     Args:
-        left: List of points defining the left boundary.
-        right: List of points defining the right boundary.
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: PerceptualFieldContext with the visible points.
 
     Returns:
         True if the polygon is simple (no self-intersections), False otherwise.
     """
-    poly_points = left + right[::-1]
+    # Convert paths to actual points
+    left_points = [context.get_point(idx) for idx in lane_candidate.left_path]
+    right_points = [context.get_point(idx) for idx in lane_candidate.right_path]
+
+    # Construct polygon by concatenating left with reversed right
+    poly_points = left_points + right_points[::-1]
     n = len(poly_points)
 
     if n < 4:
@@ -235,11 +256,6 @@ def C_poly(left: Lane, right: Lane) -> bool:
         p2 = poly_points[(i + 1) % n]
 
         # Check against all other segments, skipping adjacent ones
-        # Adjacent segments: (i-1, i) and (i+1, i+2)
-        # We start checking from i+2.
-        # We stop at n-1 (to avoid checking last segment against first if they are adjacent,
-        # but here (n-1, 0) is adjacent to (0, 1) so we stop at n-2 effectively for i=0).
-
         for j in range(i + 2, n):
             # If we are at the last segment (n-1, 0), we shouldn't check against (0, 1)
             if i == 0 and j == n - 1:
@@ -252,6 +268,190 @@ def C_poly(left: Lane, right: Lane) -> bool:
                 return False
 
     return True
+
+
+def C_width(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
+    """Verifies the Width Consistency constraint (C_width).
+
+    Ensures that the lane width falls within the acceptable bounds [W_MIN, W_MAX].
+    Uses the online lane width calculation algorithm to compute min/max widths.
+
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths.
+        context: PerceptualFieldContext with the visible points.
+
+    Returns:
+        True if the width constraint is satisfied, False otherwise.
+    """
+    # Use online_lane_width to compute the min and max widths
+    _, min_width, max_width = online_lane_width(context, lane_candidate)
+
+    # Check if both min and max widths are within acceptable bounds
+    return W_MIN <= min_width and max_width <= W_MAX
+
+
+def online_lane_width(
+    ctx: PerceptualFieldContext, candidate: LaneCandidate
+) -> Tuple[MatchingSet, float, float]:
+    """
+    Implements Algorithm 3 (Online Lane Width Calculation).
+    Returns (new_matching_set, min_width, max_width).
+
+    This function computes matching points between left and right boundaries
+    and calculates the minimum and maximum lane widths.
+
+    Matchings are tuples of (distance, l_param, r_param) where:
+    - distance: the width at this matching point
+    - l_param: parameter along left path (integer = vertex, fractional = on segment)
+    - r_param: parameter along right path (integer = vertex, fractional = on segment)
+    """
+    l_path = candidate.left_path
+    r_path = candidate.right_path
+    matchings = candidate.matchings
+
+    # 1. Start scanning from the last fixed index
+    start_l = matchings.last_fixed_l_idx
+    start_r = matchings.last_fixed_r_idx
+
+    # Get the maximum parameter values (end of each path)
+    max_l_param = float(len(l_path) - 1)
+    max_r_param = float(len(r_path) - 1)
+
+    # We will collect ALL matchings (Equation 11) starting from here
+    # Each matching is (distance, l_param, r_param)
+    new_matchings = []
+
+    # Get actual points from indices (for the portion we're computing)
+    left_points = [ctx.get_point(idx) for idx in l_path[start_l:]]
+    right_points = [ctx.get_point(idx) for idx in r_path[start_r:]]
+
+    # 2. Compute Matchings (Union of Point-to-Seg and Seg-to-Seg) per Equation 11
+
+    # 2a. Left vertices to right segments (k=0, s=0)
+    for i, l_point in enumerate(left_points):
+        l_param = float(start_l + i)
+        for j in range(len(right_points) - 1):
+            r_seg_start = right_points[j]
+            r_seg_end = right_points[j + 1]
+            dist, t = point_to_segment_distance(l_point, r_seg_start, r_seg_end)
+            r_param = float(start_r + j) + t
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2b. Right vertices to left segments (k=0, s=1)
+    for j, r_point in enumerate(right_points):
+        r_param = float(start_r + j)
+        for i in range(len(left_points) - 1):
+            l_seg_start = left_points[i]
+            l_seg_end = left_points[i + 1]
+            dist, t = point_to_segment_distance(r_point, l_seg_start, l_seg_end)
+            l_param = float(start_l + i) + t
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2c. Segment-to-segment distances (k=1)
+    for i in range(len(left_points) - 1):
+        for j in range(len(right_points) - 1):
+            l_seg_start = left_points[i]
+            l_seg_end = left_points[i + 1]
+            r_seg_start = right_points[j]
+            r_seg_end = right_points[j + 1]
+            dist, t_l, t_r = segment_to_segment_distance(
+                l_seg_start, l_seg_end, r_seg_start, r_seg_end
+            )
+            l_param = float(start_l + i) + t_l
+            r_param = float(start_r + j) + t_r
+            new_matchings.append((dist, l_param, r_param))
+
+    # 3. Sort matchings lexicographically by (l_param, r_param)
+    new_matchings.sort(key=lambda m: (m[1], m[2]))
+
+    # 4. Split into Fixed and Mutable (Algorithm 3, line 9)
+    # "All matching points which come before the first matching point
+    # that matches at least one end of either boundary are fixed."
+    # A matching is at an "end" if l_param >= max_l_param or r_param >= max_r_param
+
+    split_idx = len(new_matchings)  # Default: all fixed
+    for k, (dist, l_param, r_param) in enumerate(new_matchings):
+        # Check if this matching involves an endpoint (with small epsilon for float comparison)
+        if l_param >= max_l_param - 1e-9 or r_param >= max_r_param - 1e-9:
+            split_idx = k
+            break
+
+    # Split the new matchings
+    fixed_new = new_matchings[:split_idx]
+    mutable_new = new_matchings[split_idx:]
+
+    # 5. Create updated MatchingSet
+    # Combine previously fixed indices/widths with newly fixed ones
+    new_fixed_indices = matchings.fixed_indices + [
+        (int(np.floor(m[1])), int(np.floor(m[2]))) for m in fixed_new
+    ]
+    new_fixed_widths = matchings.fixed_widths + [m[0] for m in fixed_new]
+
+    # Update last fixed indices if we have new fixed matchings
+    if fixed_new:
+        last_fixed_l = int(np.floor(fixed_new[-1][1]))
+        last_fixed_r = int(np.floor(fixed_new[-1][2]))
+    else:
+        last_fixed_l = matchings.last_fixed_l_idx
+        last_fixed_r = matchings.last_fixed_r_idx
+
+    updated_matchings = MatchingSet(
+        fixed_indices=new_fixed_indices,
+        fixed_widths=new_fixed_widths,
+        last_fixed_l_idx=last_fixed_l,
+        last_fixed_r_idx=last_fixed_r,
+    )
+
+    # 6. Compute min/max from all widths (fixed + mutable)
+    all_widths = new_fixed_widths + [m[0] for m in mutable_new]
+    if not all_widths:
+        # No widths computed - return safe defaults
+        return updated_matchings, W_MIN + 1.0, W_MIN + 1.0
+
+    min_w = min(all_widths)
+    max_w = max(all_widths)
+
+    return updated_matchings, min_w, max_w
+
+
+def backtracking_decider(
+    min_width: float, max_width: float, violation_in_fixed_set: bool
+) -> bool:
+    """Implements BTD
+    Returns True if we have to backtrack (unfixable error)
+
+    Args:
+        min_width: Minimum width computed by online_lane_width
+        max_width: Maximum width computed by online_lane_width
+        violation_in_fixed: True if a width violation occurred in the 'fixed'
+                            portion of matchings (before the boundary endpoints)
+
+    Returns:
+        True if must Backtrack (unrecoverable violation)
+        False if can Continue (valid or recoverable)
+    """
+    # 1. Violation in Fixed Set → Backtrack
+    #    Fixed matchings won't change as we extend the path.
+    #    If they already violate constraints, this branch is dead.
+    if violation_in_fixed_set:
+        return True
+
+        # 2. Too Narrow (min_width < W_MIN) → Backtrack
+    #    Lane is too narrow. Extending the path can only make it
+    #    narrower or keep it the same - never wider at this point.
+    #    This is unrecoverable.
+    if min_width < W_MIN:
+        return True
+
+    # 3. Too Wide (max_width > W_MAX) → Continue (Don't Backtrack)
+    #    Lane is currently too wide, BUT this is recoverable.
+    #    As we extend the path, the boundaries may converge and
+    #    the width could decrease to acceptable levels.
+    if max_width > W_MAX:
+        return False
+
+    # 4. Valid - all constraints satisfied
+    return False
 
 
 def find_starting_vertices(graph: Graph, cone_map: Map, car_pos: Point, car_heading_rad: float, max_range = 2) -> tuple[int, int]:
