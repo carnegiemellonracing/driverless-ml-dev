@@ -3,7 +3,7 @@ from typing import List, Tuple, Dict, Set
 from dataclasses import dataclass, field
 
 from perceptions.lane_detection.config import D_MAX
-from scipy.spatial import cKDtree
+from scipy.spatial import cKDTree
 
 # Type definitions for clarity
 Point = np.ndarray[(2,)]
@@ -73,7 +73,7 @@ class GlobalContext:
         num_points = len(self.map_points)
         adj = {i: [] for i in range(num_points)}
 
-        tree = cKDtree(self.map_points)
+        tree = cKDTree(self.map_points)
 
         # output is a set of tuples {(i, j), ...} where i < j
         pairs = tree.query_pairs(r=D_MAX)

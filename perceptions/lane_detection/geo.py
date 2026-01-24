@@ -1,6 +1,10 @@
 import numpy as np
 import math
-import matplotlib.pyplot as plt
+from typing import List, Tuple, Dict, Set, Optional
+
+# Import dataclasses and config from models
+from perceptions.lane_detection.models import MatchingSet, LaneCandidate, GlobalContext
+from perceptions.lane_detection.config import D_MAX, W_MIN, W_MAX, PHI_MAX
 
 def deprecated(reason):
     def decorator(func):
@@ -291,31 +295,47 @@ def line_segments_intersect(p1, p2, p3, p4):
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 
-def OnlineLW(left_path, right_path, points, M_fixed_prev=None):
+def OnlineLW(left_path: List[int], right_path: List[int], points, 
+             prev_matching: Optional[MatchingSet] = None) -> MatchingSet:
     """
     Algorithm 3: Online algorithm for lane width calculation.
-    Returns (M_fixed_t, M_mut_t) where M are lists of (u, v) matching indices.
+    Returns a MatchingSet with fixed and mutable matchings.
+    
+    Args:
+        left_path: List of point indices for left boundary
+        right_path: List of point indices for right boundary  
+        points: List/array of (x, y) coordinates
+        prev_matching: Previous MatchingSet state (for incremental update)
+    
+    Returns:
+        MatchingSet with updated fixed/mutable matchings
     """
-    if M_fixed_prev is None:
-        M_fixed_prev = []
-        u_s, v_s = 0, 0
-    elif not M_fixed_prev:
+    if prev_matching is None:
+        prev_matching = MatchingSet()
         u_s, v_s = 0, 0
     else:
-        u_s, v_s = M_fixed_prev[-1]
+        u_s = prev_matching.last_fixed_l_idx
+        v_s = prev_matching.last_fixed_r_idx
 
-    # Compute matches starting from u_s, v_s
-    # Simplified: finding matches just based on nearest neighbors for vertices in current range
-    new_matches = []
-    
+    # Start with previous fixed matchings
+    new_fixed_indices = list(prev_matching.fixed_indices)
+    new_fixed_widths = list(prev_matching.fixed_widths)
+
+    # Compute new matches starting from last fixed position
     l_indices = range(u_s, len(left_path))
     r_indices = range(v_s, len(right_path))
     
     if not l_indices or not r_indices:
-        return M_fixed_prev, []
+        return MatchingSet(
+            fixed_indices=new_fixed_indices,
+            fixed_widths=new_fixed_widths,
+            last_fixed_l_idx=u_s,
+            last_fixed_r_idx=v_s
+        )
 
-    # Naive greedy matching for demonstration of the algorithm structure
-    # In reality this should follow Eq 11 more strictly
+    new_matches = []
+    
+    # Greedy nearest-neighbor matching
     for i in l_indices:
         best_j = -1
         min_d = float("inf")
@@ -325,33 +345,47 @@ def OnlineLW(left_path, right_path, points, M_fixed_prev=None):
                 min_d = d
                 best_j = j
         if best_j != -1:
-            new_matches.append((i, best_j))
+            new_matches.append(((i, best_j), min_d))
             
-    # Sort matches
-    new_matches.sort(key=lambda x: (x[0], x[1]))
+    # Sort by left index
+    new_matches.sort(key=lambda x: (x[0][0], x[0][1]))
     
-    # Split M' into M'_fixed and M_mut
-    split_idx = len(new_matches)
+    # Split into fixed and mutable
+    # Matches not at endpoints are "fixed"
     max_u = len(left_path) - 1
     max_v = len(right_path) - 1
     
-    for k, (u, v) in enumerate(new_matches):
-        if u == max_u or v == max_v:
-            split_idx = k
-            break
-            
-    M_prime_fixed = new_matches[:split_idx]
-    M_mut = new_matches[split_idx:]
+    last_l_idx = u_s
+    last_r_idx = v_s
     
-    M_fixed = M_fixed_prev + M_prime_fixed
+    for (u, v), width in new_matches:
+        if u < max_u and v < max_v:
+            # This match is fixed (not at boundary)
+            new_fixed_indices.append((u, v))
+            new_fixed_widths.append(width)
+            last_l_idx = max(last_l_idx, u + 1)
+            last_r_idx = max(last_r_idx, v + 1)
+    
     # Deduplicate
-    M_fixed = sorted(list(set(M_fixed)), key=lambda x: (x[0], x[1]))
+    seen = set()
+    deduped_indices = []
+    deduped_widths = []
+    for idx, w in zip(new_fixed_indices, new_fixed_widths):
+        if idx not in seen:
+            seen.add(idx)
+            deduped_indices.append(idx)
+            deduped_widths.append(w)
     
-    return M_fixed, M_mut
+    return MatchingSet(
+        fixed_indices=deduped_indices,
+        fixed_widths=deduped_widths,
+        last_fixed_l_idx=last_l_idx,
+        last_fixed_r_idx=last_r_idx
+    )
 
 
-def C_seg(boundary, points, max_angle=np.pi/2):
-    """Segment Consistency Constraint"""
+def C_seg(boundary, points, max_angle=PHI_MAX):
+    """Segment Consistency Constraint."""
     for i in range(len(boundary) - 2):
         p1 = points[boundary[i]]
         p2 = points[boundary[i + 1]]
@@ -362,7 +396,7 @@ def C_seg(boundary, points, max_angle=np.pi/2):
 
 
 def C_poly(left_path, right_path, points):
-    """Polynomial Consistency Constraint"""
+    """Polygon Consistency Constraint."""
     if len(left_path) < 2 or len(right_path) < 2:
         return True
         
@@ -380,8 +414,8 @@ def C_poly(left_path, right_path, points):
     return True
 
 
-def C_width(left_path, right_path, points, wmin=2.5, wmax=6.5):
-    """Width Consistency Constraint"""
+def C_width(left_path, right_path, points, wmin=W_MIN, wmax=W_MAX):
+    """Width Consistency Constraint."""
     if len(left_path) < 1 or len(right_path) < 1:
         return True
         
@@ -588,106 +622,232 @@ def generate_feature_pairs(path_pairs, points):
 
 
 
+# NOTE: Visualization functions have been removed to keep this module pure.
+# For visualization, import from a separate visualization module or use:
+#   from perceptions.lane_detection.visualization import visualize_path_pairs
 
 
-def visualize_path_pairs(path_pairs, points, title="Path Pairs"):
+# =============================================================================
+# MODEL-BASED FUNCTIONS (using GlobalContext, LaneCandidate, MatchingSet)
+# =============================================================================
+
+def next_vertex_decider_ctx(
+    ctx: GlobalContext,
+    current_path: List[int],
+    heading_vector: Optional[np.ndarray] = None
+) -> Optional[int]:
     """
-    Visualize the found path pairs for debugging and analysis.
+    Selects the next vertex to extend the path using GlobalContext.
+    Uses NVD cache when available.
+    
+    Args:
+        ctx: GlobalContext with map_points, adj_list, and nvd_cache
+        current_path: Current path as list of point indices
+        heading_vector: Initial heading vector (used when path has only 1 point)
+    
+    Returns:
+        Index of next vertex to visit, or None if no valid extension
     """
-    plt.figure(figsize=(10, 8))
+    if not current_path:
+        return None
+        
+    current_idx = current_path[-1]
+    adjacent = [v for v in ctx.adj_list.get(current_idx, []) if v not in current_path]
+    
+    if not adjacent:
+        return None
+    
+    # Check NVD cache first
+    if len(current_path) >= 2:
+        prev_idx = current_path[-2]
+        cache_key = (prev_idx, current_idx)
+        if cache_key in ctx.nvd_cache:
+            # Return first unvisited neighbor from cached sorted list
+            for v in ctx.nvd_cache[cache_key]:
+                if v in adjacent:
+                    return v
+    
+    # Compute NVD manually
+    current_point = ctx.map_points[current_idx]
+    
+    if len(current_path) == 1:
+        if heading_vector is None:
+            return adjacent[0]
+        v_prev = heading_vector
+    else:
+        prev_point = ctx.map_points[current_path[-2]]
+        v_prev = current_point - prev_point
+    
+    best_v = adjacent[0]
+    min_angle = float("inf")
+    
+    for v_idx in adjacent:
+        next_point = ctx.map_points[v_idx]
+        v_next = next_point - current_point
+        
+        norm_prev = np.linalg.norm(v_prev)
+        norm_next = np.linalg.norm(v_next)
+        
+        if norm_prev == 0 or norm_next == 0:
+            angle = 0.0
+        else:
+            dot = np.clip(np.dot(v_prev, v_next) / (norm_prev * norm_next), -1.0, 1.0)
+            angle = np.arccos(dot)
+        
+        if angle < min_angle:
+            min_angle = angle
+            best_v = v_idx
+    
+    return best_v
 
-    # Plot all points
-    points_array = np.array(points)
-    plt.scatter(
-        points_array[:, 0],
-        points_array[:, 1],
-        c="black",
-        s=100,
-        label="Points",
-        zorder=5,
+
+def constraint_decider_ctx(candidate: LaneCandidate, ctx: GlobalContext) -> bool:
+    """
+    Checks all geometric constraints on a LaneCandidate using GlobalContext.
+    
+    Args:
+        candidate: LaneCandidate with left_path, right_path
+        ctx: GlobalContext with map_points
+    
+    Returns:
+        True if all constraints pass, False otherwise
+    """
+    points = ctx.map_points
+    left = candidate.left_path
+    right = candidate.right_path
+    
+    return (C_seg(left, points) and 
+            C_seg(right, points) and 
+            C_width(left, right, points) and 
+            C_poly(left, right, points))
+
+
+def extend_candidate(
+    candidate: LaneCandidate,
+    ctx: GlobalContext,
+    extend_left: bool,
+    next_vertex: int
+) -> LaneCandidate:
+    """
+    Creates a new LaneCandidate by extending the current one.
+    This is a pure function - returns new candidate without mutating input.
+    
+    Args:
+        candidate: Current LaneCandidate
+        ctx: GlobalContext
+        extend_left: True to extend left path, False for right
+        next_vertex: Vertex index to add
+    
+    Returns:
+        New LaneCandidate with extended path
+    """
+    if extend_left:
+        new_left = candidate.left_path + [next_vertex]
+        new_right = list(candidate.right_path)
+        new_left_visited = candidate.left_visited | {next_vertex}
+        new_right_visited = set(candidate.right_visited)
+    else:
+        new_left = list(candidate.left_path)
+        new_right = candidate.right_path + [next_vertex]
+        new_left_visited = set(candidate.left_visited)
+        new_right_visited = candidate.right_visited | {next_vertex}
+    
+    # Update matchings incrementally
+    new_matchings = OnlineLW(new_left, new_right, ctx.map_points, candidate.matchings)
+    
+    return LaneCandidate(
+        left_path=new_left,
+        right_path=new_right,
+        left_visited=new_left_visited,
+        right_visited=new_right_visited,
+        matchings=new_matchings,
+        is_valid=True
     )
 
-    # Plot each path pair
-    colors = plt.cm.tab10(np.linspace(0, 1, len(path_pairs)))
-    for i, (left_path, right_path) in enumerate(path_pairs):
-        color = colors[i]
 
-        # Plot left path
-        left_coords = np.array([points[j] for j in left_path])
-        plt.plot(
-            left_coords[:, 0],
-            left_coords[:, 1],
-            "o-",
-            color=color,
-            linewidth=2,
-            markersize=8,
-            label=f"Left {i+1}",
-        )
+def enumerate_candidates(
+    ctx: GlobalContext,
+    initial_left: List[int],
+    initial_right: List[int],
+    heading_vector: np.ndarray,
+    max_iterations: int = 2500
+) -> List[LaneCandidate]:
+    """
+    Enumerates valid lane candidates using GlobalContext and LaneCandidate types.
+    
+    Args:
+        ctx: GlobalContext with map, graph, and caches
+        initial_left: Starting left path (list of point indices)
+        initial_right: Starting right path (list of point indices)
+        heading_vector: Car heading as 2D unit vector
+        max_iterations: Maximum DFS iterations
+    
+    Returns:
+        List of valid LaneCandidate objects
+    """
+    initial_candidate = LaneCandidate(
+        left_path=initial_left,
+        right_path=initial_right,
+        left_visited=set(initial_left),
+        right_visited=set(initial_right),
+        matchings=MatchingSet(),
+        is_valid=True
+    )
+    
+    results: List[LaneCandidate] = []
+    stack: List[Tuple[LaneCandidate, int]] = [(initial_candidate, 0)]
+    
+    while stack:
+        candidate, iteration = stack.pop()
+        
+        if iteration > max_iterations:
+            continue
+        
+        # Check constraints
+        if not constraint_decider_ctx(candidate, ctx):
+            continue
+        
+        l_last = candidate.left_path[-1]
+        r_last = candidate.right_path[-1]
+        
+        # Get unvisited neighbors
+        l_adj = [v for v in ctx.adj_list.get(l_last, []) 
+                 if v not in candidate.left_visited and v not in candidate.right_visited]
+        r_adj = [v for v in ctx.adj_list.get(r_last, []) 
+                 if v not in candidate.right_visited and v not in candidate.left_visited]
+        
+        # Base case: no more extensions
+        if not l_adj and not r_adj:
+            if len(candidate.left_path) > 2 and len(candidate.right_path) > 2:
+                results.append(candidate)
+            continue
+        
+        # Try extending left
+        if l_adj:
+            next_l = next_vertex_decider_ctx(ctx, candidate.left_path, heading_vector)
+            if next_l is not None and next_l in l_adj:
+                new_candidate = extend_candidate(candidate, ctx, True, next_l)
+                stack.append((new_candidate, iteration + 1))
+        
+        # Try extending right
+        if r_adj:
+            next_r = next_vertex_decider_ctx(ctx, candidate.right_path, heading_vector)
+            if next_r is not None and next_r in r_adj:
+                new_candidate = extend_candidate(candidate, ctx, False, next_r)
+                stack.append((new_candidate, iteration + 1))
+    
+    return results
 
-        # Plot right path
-        right_coords = np.array([points[j] for j in right_path])
-        plt.plot(
-            right_coords[:, 0],
-            right_coords[:, 1],
-            "s-",
-            color=color,
-            linewidth=2,
-            markersize=8,
-            label=f"Right {i+1}",
-        )
 
-        # Plot matching lines (using paper-accurate segment-based matching)
-        matching_lines = find_matching_segments(left_path, right_path, points)
-        for match in matching_lines:
-            plt.plot(
-                [match["left_point"][0], match["projection_point"][0]],
-                [match["left_point"][1], match["projection_point"][1]],
-                "--",
-                color=color,
-                alpha=0.5,
-                linewidth=1,
-            )
-
-    plt.xlabel("X")
-    plt.ylabel("Y")
-    plt.title(title)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    plt.grid(True, alpha=0.3)
-    plt.axis("equal")
-    plt.tight_layout()
-    plt.show()
-
-# Example usage:
-if __name__ == "__main__":
-    points = [
-        (0, 0),
-        (0, 3),
-    (0, 6),
-    (0, 9),
-    (0, 12),
-    (4, 0),
-    (4, 3),
-    (4, 6),
-    (4, 9),
-    (4, 12),
-    ]  # Example set of 2D points
-
-    # points = [(0, 0), (0, 3), (4, 0), (4, 3)] # Example set of 2D points
-    dmax = 5
-    adj_list = construct_adjacency_list(points, 4)
-    print("Original points:", points)
-    print("Adjacency list:", adj_list)
-
-    # Find path pairs with improved constraints
-    path_pairs = enumerate_path_pairs(adj_list, 0, 2)
-    print(f"Found {len(path_pairs)} valid path pairs:")
-    for i, pair in enumerate(path_pairs):
-        print(f" Pair {i+1}: Left={pair[0]}, Right={pair[1]}")
-
-    # Generate feature pairs
-    feature_pairs = generate_feature_pairs(path_pairs, points)
-    print(f"\nGenerated {len(feature_pairs)} feature pairs for ranking")
-
-    # Visualize results
-    if path_pairs:
-        visualize_path_pairs(path_pairs, points, "Improved Lane Detection Results")
+def compute_features_from_candidate(candidate: LaneCandidate, ctx: GlobalContext) -> List[float]:
+    """
+    Computes 8 geometric features from a LaneCandidate using GlobalContext.
+    
+    Args:
+        candidate: LaneCandidate with paths and matchings
+        ctx: GlobalContext with map_points
+    
+    Returns:
+        List of 8 feature values
+    """
+    return compute_features((candidate.left_path, candidate.right_path), ctx.map_points)

@@ -3,7 +3,7 @@ import numpy as np
 import math
 from geo import (
     calculate_segment_angle,
-    line_segments_intersect, # It's not in __all__ but available in file, let's check if we can import it or if we should test via C_poly
+    line_segments_intersect,
     point_to_segment_distance,
     segment_to_segment_distance,
     OnlineLW,
@@ -12,8 +12,161 @@ from geo import (
     C_width,
     construct_adjacency_list,
     enumerate_path_pairs_v2,
-    find_matching_segments
+    find_matching_segments,
+    within_cone,
+    within_range
 )
+
+class TestWithinCone(unittest.TestCase):
+    """Comprehensive tests for the within_cone function."""
+    
+    def test_point_at_car_position(self):
+        """Point exactly at car position should always be in cone."""
+        car_pos = np.array([0.0, 0.0])
+        point = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees
+        
+        self.assertTrue(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_directly_ahead(self):
+        """Point directly in front of car should be in cone."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees
+        
+        # Point directly ahead
+        point = np.array([5.0, 0.0])
+        self.assertTrue(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_directly_behind(self):
+        """Point directly behind car should NOT be in cone."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees
+        
+        # Point directly behind (negative x)
+        point = np.array([-5.0, 0.0])
+        self.assertFalse(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_at_cone_edge_inside(self):
+        """Point exactly at cone edge (half angle) should be inside."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees total, so 45 degrees each side
+        
+        # Point at exactly 45 degrees (pi/4) from heading
+        # At 45 degrees: point = (cos(45), sin(45)) * distance
+        dist = 10.0
+        point = np.array([dist * np.cos(np.pi / 4), dist * np.sin(np.pi / 4)])
+        
+        self.assertTrue(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_just_outside_cone(self):
+        """Point just outside cone boundary should NOT be in cone."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees total, so 45 degrees each side
+        
+        # Point at 46 degrees - just outside the 45 degree boundary
+        angle = np.pi / 4 + 0.02  # Slightly more than 45 degrees
+        dist = 10.0
+        point = np.array([dist * np.cos(angle), dist * np.sin(angle)])
+        
+        self.assertFalse(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_perpendicular_narrow_cone(self):
+        """Point perpendicular to heading should NOT be in narrow cone."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 3  # 60 degrees total, so 30 degrees each side
+        
+        # Point at 90 degrees (perpendicular) - definitely outside 30 degree limit
+        point = np.array([0.0, 5.0])
+        self.assertFalse(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_point_perpendicular_wide_cone(self):
+        """Point perpendicular to heading should be in wide cone (>180 deg)."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi  # 180 degrees total, so 90 degrees each side
+        
+        # Point at exactly 90 degrees (perpendicular) - at edge
+        point = np.array([0.0, 5.0])
+        self.assertTrue(within_cone(point, car_pos, heading, cone_angle))
+    
+    def test_different_heading_facing_up(self):
+        """Test cone with heading facing +y (up)."""
+        car_pos = np.array([0.0, 0.0])
+        heading = np.pi / 2  # Facing +y (90 degrees)
+        cone_angle = np.pi / 2  # 90 degrees total
+        
+        # Point directly ahead (+y direction)
+        point_ahead = np.array([0.0, 5.0])
+        self.assertTrue(within_cone(point_ahead, car_pos, heading, cone_angle))
+        
+        # Point directly behind (-y direction)
+        point_behind = np.array([0.0, -5.0])
+        self.assertFalse(within_cone(point_behind, car_pos, heading, cone_angle))
+        
+        # Point to the right (+x direction) - at 90 degrees from heading
+        point_right = np.array([5.0, 0.0])
+        self.assertFalse(within_cone(point_right, car_pos, heading, cone_angle))
+    
+    def test_different_heading_facing_left(self):
+        """Test cone with heading facing -x (left)."""
+        car_pos = np.array([0.0, 0.0])
+        heading = np.pi  # Facing -x (180 degrees)
+        cone_angle = np.pi / 2  # 90 degrees total
+        
+        # Point directly ahead (-x direction)
+        point_ahead = np.array([-5.0, 0.0])
+        self.assertTrue(within_cone(point_ahead, car_pos, heading, cone_angle))
+        
+        # Point directly behind (+x direction)
+        point_behind = np.array([5.0, 0.0])
+        self.assertFalse(within_cone(point_behind, car_pos, heading, cone_angle))
+    
+    def test_car_at_nonzero_position(self):
+        """Test cone when car is not at origin."""
+        car_pos = np.array([10.0, 20.0])
+        heading = 0.0  # Facing +x
+        cone_angle = np.pi / 2  # 90 degrees
+        
+        # Point ahead of car (greater x, same y)
+        point_ahead = np.array([15.0, 20.0])
+        self.assertTrue(within_cone(point_ahead, car_pos, heading, cone_angle))
+        
+        # Point behind car (lesser x, same y)
+        point_behind = np.array([5.0, 20.0])
+        self.assertFalse(within_cone(point_behind, car_pos, heading, cone_angle))
+    
+    def test_very_narrow_cone(self):
+        """Test with a very narrow cone (10 degrees)."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0
+        cone_angle = np.pi / 18  # 10 degrees total, 5 degrees each side
+        
+        # Point directly ahead - should be in
+        point_ahead = np.array([10.0, 0.0])
+        self.assertTrue(within_cone(point_ahead, car_pos, heading, cone_angle))
+        
+        # Point at 6 degrees - should be out (> 5 degree limit)
+        angle = np.pi / 30  # 6 degrees
+        point_outside = np.array([10.0 * np.cos(angle), 10.0 * np.sin(angle)])
+        self.assertFalse(within_cone(point_outside, car_pos, heading, cone_angle))
+    
+    def test_full_circle_cone(self):
+        """Test with full 360 degree cone - everything should be inside."""
+        car_pos = np.array([0.0, 0.0])
+        heading = 0.0
+        cone_angle = 2 * np.pi  # 360 degrees
+        
+        # Points in all directions should be in
+        self.assertTrue(within_cone(np.array([5.0, 0.0]), car_pos, heading, cone_angle))
+        self.assertTrue(within_cone(np.array([-5.0, 0.0]), car_pos, heading, cone_angle))
+        self.assertTrue(within_cone(np.array([0.0, 5.0]), car_pos, heading, cone_angle))
+        self.assertTrue(within_cone(np.array([0.0, -5.0]), car_pos, heading, cone_angle))
 
 class TestGeoUtils(unittest.TestCase):
 
