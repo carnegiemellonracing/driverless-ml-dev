@@ -242,11 +242,11 @@ class TestFindStartingVertices(unittest.TestCase):
             ]
         )
         graph = {0: [1], 1: [0]}
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         # Both should be found
         self.assertIsNotNone(left_pt, "Failed: left starting point not found")
@@ -267,11 +267,11 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         self.assertIsNone(left_pt, "Failed: found left point outside range")
         self.assertIsNone(right_pt, "Failed: found right point outside range")
@@ -290,11 +290,11 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         self.assertIsNone(left_pt, "Failed: found left point when no valid pair exists")
         self.assertIsNone(
@@ -315,11 +315,11 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         self.assertIsNone(left_pt, "Failed: found left point when no valid pair exists")
         self.assertIsNone(
@@ -341,11 +341,11 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [], 1: [], 2: [], 3: []}
 
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         self.assertEqual(left_pt, 1, "Failed: left starting point not most symmetric")
         self.assertEqual(right_pt, 3, "Failed: right starting point not most symmetric")
@@ -366,11 +366,11 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
-        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
-
-        left_pt, right_pt = find_starting_vertices(
-            ctx, max_range=5.0
+        ctx = PerceptualFieldContext(
+            cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad
         )
+
+        left_pt, right_pt = find_starting_vertices(ctx, max_range=5.0)
 
         self.assertIsNotNone(left_pt)
         self.assertIsNotNone(right_pt)
@@ -414,7 +414,9 @@ class TestNextVertexDecider(unittest.TestCase):
         result = next_vertex_decider(ctx, path, car_heading=0.0)
 
         # Should be sorted: idx 2 (0 deg), idx 3 (45 deg), idx 4 (90 deg), idx 0 (180 deg)
-        self.assertEqual(result[0], 2, "First neighbor should be straight ahead (0 deg)")
+        self.assertEqual(
+            result[0], 2, "First neighbor should be straight ahead (0 deg)"
+        )
         self.assertEqual(result[1], 3, "Second neighbor should be at 45 deg")
         self.assertEqual(result[2], 4, "Third neighbor should be at 90 deg")
         self.assertEqual(result[3], 0, "Fourth neighbor should be behind (180 deg)")
@@ -446,7 +448,9 @@ class TestNextVertexDecider(unittest.TestCase):
         result = next_vertex_decider(ctx, path, car_heading=0.0)
 
         # With car_heading=0 (pointing +x), idx 1 is closer (0 deg) than idx 2 (90 deg)
-        self.assertEqual(result[0], 1, "Should prefer neighbor aligned with car heading")
+        self.assertEqual(
+            result[0], 1, "Should prefer neighbor aligned with car heading"
+        )
         self.assertEqual(result[1], 2, "Second neighbor at 90 deg")
 
     def test_cache_hit_returns_same_result(self):
@@ -521,7 +525,9 @@ class TestNextVertexDecider(unittest.TestCase):
         result = next_vertex_decider(ctx, path, car_heading=math.pi / 2)
 
         # With car_heading=pi/2 (pointing +y), idx 1 is closer (0 deg) than idx 2 (90 deg)
-        self.assertEqual(result[0], 1, "Should prefer neighbor aligned with car heading (+y)")
+        self.assertEqual(
+            result[0], 1, "Should prefer neighbor aligned with car heading (+y)"
+        )
         self.assertEqual(result[1], 2, "Second neighbor at 90 deg")
 
 

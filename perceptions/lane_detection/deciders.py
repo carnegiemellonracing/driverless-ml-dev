@@ -1,9 +1,8 @@
 from typing import List
 
 import numpy as np
-
-from perceptions.lane_detection.config import W_MAX, W_MIN
-from perceptions.lane_detection.models import PerceptualFieldContext
+from config import W_MAX, W_MIN
+from models import PerceptualFieldContext
 
 
 def backtracking_decider(
