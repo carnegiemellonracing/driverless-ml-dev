@@ -1,3 +1,4 @@
+from tkinter import _WmAttributes
 import numpy as np
 from typing import List, Tuple
 from models import Point, Lane, LaneCandidate, PerceptualFieldContext, MatchingSet
@@ -148,7 +149,10 @@ def segment_to_segment_distance(
 
 
 def get_point_at_param(
-    lane_candidate: LaneCandidate, context: PerceptualFieldContext, t: float, side: str = "left"
+    lane_candidate: LaneCandidate,
+    context: PerceptualFieldContext,
+    t: float,
+    side: str = "left",
 ) -> Point:
     """Interpolates a point on the lane at parameter t (Eq 7/8).
 
@@ -409,6 +413,47 @@ def online_lane_width(
     max_w = max(all_widths)
 
     return updated_matchings, min_w, max_w
+
+
+def backtracking_decider(
+    min_width: float, max_width: float, violation_in_fixed_set: bool
+) -> bool:
+    """Implements BTD
+    Returns True if we have to backtrack (unfixable error)
+
+    Args:
+        min_width: Minimum width computed by online_lane_width
+        max_width: Maximum width computed by online_lane_width
+        violation_in_fixed: True if a width violation occurred in the 'fixed'
+                            portion of matchings (before the boundary endpoints)
+
+    Returns:
+        True if must Backtrack (unrecoverable violation)
+        False if can Continue (valid or recoverable)
+    """
+    # 1. Violation in Fixed Set → Backtrack
+    #    Fixed matchings won't change as we extend the path.
+    #    If they already violate constraints, this branch is dead.
+    if violation_in_fixed_set:
+        return True
+
+        # 2. Too Narrow (min_width < W_MIN) → Backtrack
+    #    Lane is too narrow. Extending the path can only make it
+    #    narrower or keep it the same - never wider at this point.
+    #    This is unrecoverable.
+    if min_width < W_MIN:
+        return True
+
+    # 3. Too Wide (max_width > W_MAX) → Continue (Don't Backtrack)
+    #    Lane is currently too wide, BUT this is recoverable.
+    #    As we extend the path, the boundaries may converge and
+    #    the width could decrease to acceptable levels.
+    if max_width > W_MAX:
+        return False
+
+    # 4. Valid - all constraints satisfied
+    return False
+
 
 # def compute_matchings(
 #     left: Lane, right: Lane, start_u: float, start_v: float
