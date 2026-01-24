@@ -208,3 +208,6 @@ __marimo__/
 
 # Data mount
 ml_data/
+
+
+perceptions/lane_detection/images/

@@ -20,30 +20,62 @@ class LaneDetectionDataset(Dataset):
         self.augment = augment
 
     def create_dataset(self, maps):
+        from geo import compute_features, compute_lane_iou
+        
+        self.data = []
+        
         for bound, points in maps:
+            # Generate perceptual fields from ground truth
             perceptual_fields = generate_perceptual_field_data(bound, points)
-            for car_heading_deg, paths, subgraph, left_subset, right_subset in perceptual_fields:
-                h_vec = [math.cos(car_heading_deg*math.pi/180), math.sin(car_heading_deg*math.pi/180)]
-                # points_numpy = {key: np.array(value_list) for key, value_list in points.items()}
-                # print(points_numpy)
-                enum_paths = enumerate_path_pairs_v2(subgraph, points, paths, visited=set(), heading_vector=h_vec, it=0, itmax=2500)
+            
+            for car_heading_rad, paths, subgraph, left_subset, right_subset in perceptual_fields:
+                h_vec = [math.cos(car_heading_rad), math.sin(car_heading_rad)]
                 
-                # Use generate_feature_pairs to get feature vectors
-                from geo import generate_feature_pairs
-                feature_vectors = generate_feature_pairs(enum_paths, points)
+                # 1. Run EPP to get candidates
+                # Use current GT visible subset as start nodes is unrealistic for inference, 
+                # but for training data generation we need candidates that are reachable.
+                # In inference we use NVD/LRD to find start nodes. 
+                # Here we follow the existing pattern: use the visible subset's first points.
+                if not left_subset or not right_subset:
+                    continue
+                    
+                sl, sr = int(left_subset[0]), int(right_subset[0])
+                initial_visited = {sl, sr}
+                # Run EPP
+                candidates = enumerate_path_pairs_v2(
+                    subgraph, points, ([sl], [sr]), initial_visited, h_vec, 0, itmax=500
+                )
                 
-                # For now, just store features. 
-                # Note: This logic seems to be evolving. Ideally we match feature vectors to labels/IoU.
-                # As a placeholder to prevent crash:
-                for feats in feature_vectors:
-                     # Create dummy IoU or matching structure if needed by __getitem__
-                     # __getitem__ expects (merged_feats, merged_IoU)
-                     # feats is a list of 8 features.
-                     # We store it.
-                     pass
+                if len(candidates) < 2:
+                    continue
                 
-                # To be fully implemented when training logic is clarified.
-                # For now, we remove exit() to allow execution.
+                # 2. Compute Features and IoU for all candidates
+                cand_features = []
+                cand_ious = []
+                
+                gt_pair = (left_subset, right_subset)
+                
+                for cand in candidates:
+                    feats = compute_features(cand, points)
+                    iou = compute_lane_iou(cand, gt_pair, points)
+                    
+                    cand_features.append(np.array(feats, dtype=np.float32))
+                    cand_ious.append(iou)
+                
+                # 3. Generate Pairs
+                # Compare every candidate with every other candidate
+                num_cands = len(candidates)
+                for i in range(num_cands):
+                    for j in range(num_cands):
+                        if i == j:
+                            continue
+                        
+                        # Store (feat1, feat2) and (iou1, iou2)
+                        # We merge them into single arrays for __getitem__ convenience
+                        merged_feats = np.stack([cand_features[i], cand_features[j]])
+                        merged_ious = np.array([cand_ious[i], cand_ious[j]], dtype=np.float32)
+                        
+                        self.data.append((merged_feats, merged_ious))
 
     def __len__(self):
         return len(self.data)
@@ -55,11 +87,17 @@ class LaneDetectionDataset(Dataset):
         IoU_tensor   = torch.from_numpy(merged_IoU)
 
         if self.augment:
-            # Augment both left and right boundaries together to maintain their spatial relationship
-            augmented_feats = augment_feats(feats_tensor)
-            augmented_IoU   = augment_IoU(IoU_tensor)
+            # Augment features with noise
+            feats_tensor = augment_feats(feats_tensor)
+            # IoU labels are usually kept ground truth, but user code had augment_IoU.
+            # We keep it for consistency if desired, or remove for correctness.
+            # Usually we don't augment regression targets with noise?
+            # But here IoU is used for probability.
+            # I'll convert IoU to tensor but maybe skip noise for IoU unless requested.
+            # The existing code had augment_IoU. I will assume it's desired.
+            IoU_tensor = augment_IoU(IoU_tensor)
 
-        return augmented_feats, augmented_IoU
+        return feats_tensor, IoU_tensor
 
 
 
