@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from geo import C_seg, C_poly, C_width, find_starting_vertices
+from geo import C_seg, C_poly, C_width, find_starting_vertices, next_vertex_decider
 from models import LaneCandidate, PerceptualFieldContext
 from config import W_MIN, W_MAX
 import math
@@ -365,6 +365,152 @@ class TestFindStartingVertices(unittest.TestCase):
 
         self.assertEqual(left_pt, 0, "Failed: left starting point wrong")
         self.assertEqual(right_pt, 1, "Failed: left starting point wrong")
+
+
+class TestNextVertexDecider(unittest.TestCase):
+    """Tests for next_vertex_decider (NVD) function."""
+
+    def test_neighbors_sorted_by_angle(self):
+        """Test that neighbors are sorted by ascending angle deviation."""
+        # Setup: current at origin, previous at (-1, 0), so direction is +x
+        # Neighbors at various angles from +x direction
+        cone_map = np.array(
+            [
+                [-1.0, 0.0],  # idx 0: previous point
+                [0.0, 0.0],  # idx 1: current point
+                [1.0, 0.0],  # idx 2: neighbor straight ahead (0 deg)
+                [1.0, 1.0],  # idx 3: neighbor at 45 deg
+                [0.0, 1.0],  # idx 4: neighbor at 90 deg
+            ]
+        )
+        adj_list = {
+            0: [1],
+            1: [0, 2, 3, 4],  # current has 4 neighbors
+            2: [1],
+            3: [1],
+            4: [1],
+        }
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices=set(range(5)),
+            adj_list=adj_list,
+            car_pos=np.array([0.0, 0.0]),
+            car_heading=0.0,
+        )
+
+        path = [0, 1]  # prev=0, curr=1
+        result = next_vertex_decider(ctx, path, car_heading=0.0)
+
+        # Should be sorted: idx 2 (0 deg), idx 3 (45 deg), idx 4 (90 deg), idx 0 (180 deg)
+        self.assertEqual(result[0], 2, "First neighbor should be straight ahead (0 deg)")
+        self.assertEqual(result[1], 3, "Second neighbor should be at 45 deg")
+        self.assertEqual(result[2], 4, "Third neighbor should be at 90 deg")
+        self.assertEqual(result[3], 0, "Fourth neighbor should be behind (180 deg)")
+
+    def test_single_point_path_uses_car_heading(self):
+        """Test that single-point path uses car_heading as direction."""
+        # Car heading is +x (0 radians), starting at point 0
+        cone_map = np.array(
+            [
+                [0.0, 0.0],  # idx 0: current (start) point
+                [1.0, 0.0],  # idx 1: straight ahead
+                [0.0, 1.0],  # idx 2: 90 deg left
+            ]
+        )
+        adj_list = {
+            0: [1, 2],
+            1: [0],
+            2: [0],
+        }
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices=set(range(3)),
+            adj_list=adj_list,
+            car_pos=np.array([0.0, 0.0]),
+            car_heading=0.0,
+        )
+
+        path = [0]  # Only current point
+        result = next_vertex_decider(ctx, path, car_heading=0.0)
+
+        # With car_heading=0 (pointing +x), idx 1 is closer (0 deg) than idx 2 (90 deg)
+        self.assertEqual(result[0], 1, "Should prefer neighbor aligned with car heading")
+        self.assertEqual(result[1], 2, "Second neighbor at 90 deg")
+
+    def test_cache_hit_returns_same_result(self):
+        """Test that cached results are returned on subsequent calls."""
+        cone_map = np.array(
+            [
+                [0.0, 0.0],  # idx 0
+                [1.0, 0.0],  # idx 1
+                [2.0, 0.0],  # idx 2
+            ]
+        )
+        adj_list = {0: [1], 1: [0, 2], 2: [1]}
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices=set(range(3)),
+            adj_list=adj_list,
+            car_pos=np.array([0.0, 0.0]),
+            car_heading=0.0,
+        )
+
+        path = [0, 1]
+        result1 = next_vertex_decider(ctx, path, car_heading=0.0)
+
+        # Verify cache was populated
+        self.assertIn((0, 1), ctx.nvd_cache, "Cache should contain the key")
+
+        # Call again - should return cached result
+        result2 = next_vertex_decider(ctx, path, car_heading=0.0)
+        self.assertEqual(result1, result2, "Cached result should match original")
+
+    def test_empty_neighbors_returns_empty_list(self):
+        """Test that empty neighbor list returns empty result."""
+        cone_map = np.array(
+            [
+                [0.0, 0.0],  # idx 0: isolated point
+            ]
+        )
+        adj_list = {0: []}  # No neighbors
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices={0},
+            adj_list=adj_list,
+            car_pos=np.array([0.0, 0.0]),
+            car_heading=0.0,
+        )
+
+        path = [0]
+        result = next_vertex_decider(ctx, path, car_heading=0.0)
+
+        self.assertEqual(result, [], "Should return empty list for no neighbors")
+
+    def test_different_car_heading(self):
+        """Test with car heading pointing in different direction."""
+        # Car heading is +y (pi/2 radians)
+        cone_map = np.array(
+            [
+                [0.0, 0.0],  # idx 0: current point
+                [0.0, 1.0],  # idx 1: straight ahead (+y)
+                [1.0, 0.0],  # idx 2: 90 deg right
+            ]
+        )
+        adj_list = {0: [1, 2], 1: [0], 2: [0]}
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices=set(range(3)),
+            adj_list=adj_list,
+            car_pos=np.array([0.0, 0.0]),
+            car_heading=math.pi / 2,  # Pointing +y
+        )
+
+        path = [0]  # Single point, uses car_heading
+        result = next_vertex_decider(ctx, path, car_heading=math.pi / 2)
+
+        # With car_heading=pi/2 (pointing +y), idx 1 is closer (0 deg) than idx 2 (90 deg)
+        self.assertEqual(result[0], 1, "Should prefer neighbor aligned with car heading (+y)")
+        self.assertEqual(result[1], 2, "Second neighbor at 90 deg")
 
 
 if __name__ == "__main__":
