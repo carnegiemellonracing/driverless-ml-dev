@@ -1,17 +1,22 @@
 import numpy as np
 from typing import List, Tuple
-from models import Point, Lane
+from models import Point, Lane, LaneCandidate, GlobalContext
 import math
 
 
 """
 UTILS
 """
+
+
 def within_range(point, car_pos, perceptual_field):
-    if np.linalg.norm(car_pos - point) <= perceptual_field: # TODO for this and similar inequalities, do we want strict or equal
+    if (
+        np.linalg.norm(car_pos - point) <= perceptual_field
+    ):  # TODO for this and similar inequalities, do we want strict or equal
         return True
     return False
-    
+
+
 def within_cone(point, car_pos, heading, cone_angle):
     """Checks if a point is within the car's field of view cone."""
     if np.array_equal(point, car_pos):
@@ -25,6 +30,7 @@ def within_cone(point, car_pos, heading, cone_angle):
     dot = np.clip(np.dot(v_point / norm_point, v_heading), -1.0, 1.0)
     angle = np.arccos(dot)
     return angle <= (cone_angle / 2)
+
 
 def get_segment_angle(p1: Point, p2: Point, p3: Point) -> float:
     """Calculates the absolute deflection angle between two consecutive segments.
@@ -140,17 +146,36 @@ def segment_to_segment_distance(
         return d4, t_s1_2, 1.0
 
 
-def get_point_at_param(lane: Lane, t: float) -> Point:
-    """Interpolates a point on the lane at parameter t (Eq 7/8)."""
+def get_point_at_param(
+    lane_candidate: LaneCandidate,
+    context: GlobalContext,
+    t: float,
+    side: str = "left"
+) -> Point:
+    """Interpolates a point on the lane at parameter t (Eq 7/8).
+    
+    Args:
+        lane_candidate: The LaneCandidate containing left and right paths
+        context: GlobalContext with the map points
+        t: Parameter value for interpolation
+        side: Which boundary to interpolate ("left" or "right")
+    
+    Returns:
+        Interpolated point on the specified boundary
+    """
+    # Select the appropriate path based on side
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+    
     i = int(np.floor(t))
     lam = t - i
 
     # Clamp to end
-    if i >= len(lane) - 1:
-        return lane[-1]
+    if i >= len(path) - 1:
+        return context.map_points[path[-1]]
 
-    p_i = lane[i]
-    p_next = lane[i + 1]
+    # Get the actual points from the global map using indices
+    p_i = context.map_points[path[i]]
+    p_next = context.map_points[path[i + 1]]
 
     # P(i + lambda) = (1 - lambda)p_i + lambda * p_next
     return (1.0 - lam) * p_i + lam * p_next

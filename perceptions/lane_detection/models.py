@@ -2,13 +2,14 @@ import numpy as np
 from typing import Annotated, List, Literal, Tuple, Dict, Set
 from dataclasses import dataclass, field
 
-from perceptions.lane_detection.config import D_MAX
+from config import D_MAX
 from scipy.spatial import ckdtree
 import numpy.typing as npt
 
 # Type definitions for clarity
-Point = Annotated[npt.NDArray[np.float64], Literal[2, 1]]
-Map = Annotated[npt.NDArray[np.float64], Literal[2, ...]]
+Point = Annotated[npt.NDArray[np.float64], Literal[2]]
+Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
+Lane = List[Point]  # A lane is a list of points
 
 
 @dataclass
