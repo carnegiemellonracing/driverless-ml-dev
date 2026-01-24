@@ -241,9 +241,10 @@ class TestFindStartingVertices(unittest.TestCase):
             ]
         )
         graph = {0: [1], 1: [0]}
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
 
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=5.0
+            ctx, max_range=5.0
         )
 
         # Both should be found
@@ -265,8 +266,10 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
+
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=1.0
+            ctx, max_range=5.0
         )
 
         self.assertIsNone(left_pt, "Failed: found left point outside range")
@@ -286,8 +289,10 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
+
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=5.0
+            ctx, max_range=5.0
         )
 
         self.assertIsNone(left_pt, "Failed: found left point when no valid pair exists")
@@ -309,8 +314,10 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
+
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=5.0
+            ctx, max_range=5.0
         )
 
         self.assertIsNone(left_pt, "Failed: found left point when no valid pair exists")
@@ -333,8 +340,10 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [], 1: [], 2: [], 3: []}
 
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
+
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=5.0
+            ctx, max_range=5.0
         )
 
         self.assertEqual(left_pt, 1, "Failed: left starting point not most symmetric")
@@ -356,8 +365,10 @@ class TestFindStartingVertices(unittest.TestCase):
         )
         graph = {0: [1], 1: [0]}
 
+        ctx = PerceptualFieldContext(cone_map, set(range(len(cone_map))), graph, car_pos, car_heading_rad)
+
         left_pt, right_pt = find_starting_vertices(
-            graph, cone_map, car_pos, car_heading_rad, max_range=5.0
+            ctx, max_range=5.0
         )
 
         self.assertIsNotNone(left_pt)

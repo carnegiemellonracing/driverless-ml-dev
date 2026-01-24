@@ -454,7 +454,7 @@ def backtracking_decider(
 
 
 def find_starting_vertices(
-    graph: Graph, cone_map: Map, car_pos: Point, car_heading_rad: float, max_range=2
+    ctx: PerceptualFieldContext, max_range=2
 ) -> tuple[int, int]:
     """Selects two staring vertices from a graph to form the beginning of left and right lane candidates
 
@@ -464,33 +464,34 @@ def find_starting_vertices(
     the one that is the most symmetrical with respect to the line defined by the position and direction vector of the car.
 
     Args:
-        graph: Perceptual field graph.
-        car_pos: Position of car within perceptual field.
-        car_heading_rad: Heading of car in radians.
-        max_range: Maximum range to search for starting points in meters
+        Context which includes:
+            graph: Perceptual field graph.
+            car_pos: Position of car within perceptual field.
+            car_heading_rad: Heading of car in radians.
+            max_range: Maximum range to search for starting points in meters
 
     Returns:
         Left and right starting points INDICES, or None if not found
     """
     # Step 1: Filter points within max_range
     candidates_within_range = []
-    for idx in graph.keys():
-        point = cone_map[idx]
-        if within_range(point, car_pos, max_range):
+    for idx in ctx.adj_list.keys():
+        point = ctx.get_point(idx)
+        if within_range(point, ctx.car_pos, max_range):
             candidates_within_range.append((idx, point))
 
     if not candidates_within_range:
         return (None, None)
 
     # Step 2: Compute angles relative to car heading and classify as left/right
-    car_heading_vec = np.array([np.cos(car_heading_rad), np.sin(car_heading_rad)])
+    car_heading_vec = np.array([np.cos(ctx.car_heading), np.sin(ctx.car_heading)])
 
     left_candidates = []  # Points with positive angle (left of heading)
     right_candidates = []  # Points with negative angle (right of heading)
 
     for idx, point in candidates_within_range:
         # Vector from car to point
-        vec_to_point = point - car_pos
+        vec_to_point = point - ctx.car_pos
         norm_vec = np.linalg.norm(vec_to_point)
 
         if norm_vec == 0:
