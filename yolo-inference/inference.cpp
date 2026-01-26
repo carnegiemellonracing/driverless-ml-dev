@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
 
     std::cout << "[INFO] Starting Warm-up" << std::endl;
     const int NUM_WARMUP = 5;
-    for (int i = 0; i < NUM_WARMUP; ++i) {
+    for (int i = 0; i < NUM_WARMUP; ++i) { //create new std vector that holds output of detect, struct Detection: stores detection points, then compare to image (use image loader, iou map) use include for header file 
        yolo.detect(img, 0.7f); 
     }
 
