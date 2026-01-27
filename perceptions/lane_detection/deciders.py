@@ -1,9 +1,15 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from perceptions.lane_detection.config import W_MAX, W_MIN
-from perceptions.lane_detection.models import PerceptualFieldContext, Lane, Point
+from perceptions.lane_detection.models import (
+    LaneCandidate,
+    PerceptualFieldContext,
+    Lane,
+    Point,
+)
 from perceptions.lane_detection.geo import get_segment_angle
+
 
 def backtracking_decider(
     min_width: float, max_width: float, violation_in_fixed_set: bool
@@ -102,20 +108,26 @@ def next_vertex_decider(
     ctx.nvd_cache[cache_key] = sorted_neighbors
     return sorted_neighbors
 
-def left_right_decider(ctx: PerceptualFieldContext, left_lane: Lane, right_lane: Lane,
-                       left_candidate: int, right_candidate: int) -> int:
+
+def left_right_decider(
+    ctx: PerceptualFieldContext,
+    left_lane: Lane,
+    right_lane: Lane,
+    left_candidate: int,
+    right_candidate: int,
+) -> int:
     """Left-Right decider
     Greedy Heuristic that decides whether it is better to add left or right candidate to
-    their respective paths. Does so by creating two new path pairs, P_1' being 
+    their respective paths. Does so by creating two new path pairs, P_1' being
     left_lane.append(left_candidate) and right_lane
-    and P_2' being 
+    and P_2' being
     left_lane and right_lane.append(right_candidate)
 
-    Then for each path it computes 
+    Then for each path it computes
     theta_l = angle between the segments:
          - left_lane[-2] to left_lane[-1]
          - left_lane[-1] to right_lane[-1]
-    and 
+    and
     theta_l = angle between the segments:
          - right_lane[-2] to right_lane[-1]
           -right_lane[-1] to left_lane[-1]
@@ -137,48 +149,48 @@ def left_right_decider(ctx: PerceptualFieldContext, left_lane: Lane, right_lane:
         Integer 0,1 depending on whether it is better to add the left or right point
     """
     if len(left_lane) < 2 or len(right_lane) < 2:
-        return 0 # Left default bias
-    
+        return 0  # Left default bias
+
     cone_map = ctx.cone_map
-    
+
     left_lane_p1 = left_lane + [left_candidate]
-    
+
     # theta_l^1: angle at the junction in the left lane
     # Segments: left_lane[-2]->left_lane[-1] and left_lane[-1]->left_candidate
     p1_left_prev = cone_map[left_lane[-2]]
     p1_left_curr = cone_map[left_lane[-1]]
     p1_left_next = cone_map[left_candidate]
     theta_l_1 = get_segment_angle(p1_left_prev, p1_left_curr, p1_left_next)
-    
+
     # theta_r^1: angle in the cross connection
     # Segments: right_lane[-2]->right_lane[-1] and right_lane[-1]->left_lane[-1]
     p1_right_prev = cone_map[right_lane[-2]]
     p1_right_curr = cone_map[right_lane[-1]]
     p1_right_next = cone_map[left_lane[-1]]
     theta_r_1 = get_segment_angle(p1_right_prev, p1_right_curr, p1_right_next)
-    
+
     # Scenario 2: Add right_candidate to right_lane
     # P_2' = left_lane, right_lane + [right_candidate]
     right_lane_p2 = right_lane + [right_candidate]
-    
+
     # theta_l^2: angle in the cross connection
     # Segments: left_lane[-2]->left_lane[-1] and left_lane[-1]->right_lane[-1]
     p2_left_prev = cone_map[left_lane[-2]]
     p2_left_curr = cone_map[left_lane[-1]]
     p2_left_next = cone_map[right_lane[-1]]
     theta_l_2 = get_segment_angle(p2_left_prev, p2_left_curr, p2_left_next)
-    
+
     # theta_r^2: angle at the junction in the right lane
     # Segments: right_lane[-2]->right_lane[-1] and right_lane[-1]->right_candidate
     p2_right_prev = cone_map[right_lane[-2]]
     p2_right_curr = cone_map[right_lane[-1]]
     p2_right_next = cone_map[right_candidate]
     theta_r_2 = get_segment_angle(p2_right_prev, p2_right_curr, p2_right_next)
-    
+
     # Compare: choose based on which scenario has smaller angular deviation
     scenario_1_deviation = abs(theta_r_1) + abs(theta_l_1)
     scenario_2_deviation = abs(theta_r_2) + abs(theta_l_2)
-    
+
     # Return 0 for left if scenario 1 is better, 1 for right if scenario 2 is better
     if scenario_1_deviation < scenario_2_deviation:
         return 0  # Prefer left
@@ -186,3 +198,7 @@ def left_right_decider(ctx: PerceptualFieldContext, left_lane: Lane, right_lane:
         return 1  # Prefer right
 
 
+def enumerate_path_pairs(
+    ctx: PerceptualFieldContext, left_start: Optional[int], right_start: Optional[int]
+) -> List[LaneCandidate]:
+    pass
