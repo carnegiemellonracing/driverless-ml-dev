@@ -26,14 +26,20 @@ from perceptions.lane_detection.ranker import extract_features
 
 
 class Classifier:
-    def __init__(self):
+"""
+:param dmax: Maximum distance threshold for adjacency (default: 5.0m)
+"""
+    def __init__(self, dmax=5.0):
         print("Classifier Initialized.")
+
+        self.dmax = dmax
+        self.model = ConeClassifier()
 
     def eval(self, cone_map: Map) -> LaneCandidate:
         print(f"Running inference on {len(cone_map)} cones...")
 
         # 1. Setup Context
-        adj = build_adjacency_graph(cone_map, dmax=5.0)
+        adj = build_adjacency_graph(cone_map, dmax=self.dmax)
         # Estimate car pos (mean of first few points or 0,0)
         car_pos = np.array([0.0, 0.0])  # improved estimation needed for real usage
         if len(cone_map) > 0:
@@ -60,7 +66,6 @@ class Classifier:
 
         # 4. Score
         try:
-            model = ConeClassifier()
             # Handle state dict loading safely
             checkpoint = torch.load(model_path, map_location="cpu")
             state_dict = (
@@ -68,8 +73,8 @@ class Classifier:
                 if "model_state_dict" in checkpoint
                 else checkpoint
             )
-            model.load_state_dict(state_dict)
-            model.eval()
+            self.model.load_state_dict(state_dict)
+            self.model.eval()
         except Exception as e:
             print(f"Failed to load model from {model_path}: {e}")
             # Return longest candidate as fallback
@@ -81,7 +86,7 @@ class Classifier:
         with torch.no_grad():
             for i, cand in enumerate(candidates):
                 feats = extract_features(cand, ctx)
-                score = model(feats.unsqueeze(0)).item()
+                score = self.model(feats.unsqueeze(0)).item()
 
                 if score > best_score:
                     best_score = score
