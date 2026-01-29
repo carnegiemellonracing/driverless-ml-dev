@@ -27,7 +27,7 @@ from perceptions.lane_detection.ranker import extract_features
 
 class Classifier:
     def __init__(self):
-        pass
+        print("Classifier Initialized.")
 
     def eval(self, cone_map: Map) -> LaneCandidate:
         print(f"Running inference on {len(cone_map)} cones...")
