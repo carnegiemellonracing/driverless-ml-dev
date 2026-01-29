@@ -2,29 +2,33 @@ import os
 import yaml
 import numpy as np
 import math
-from typing import Dict, List
+from typing import Any, Dict, List
 from perceptions.lane_detection.geo import within_range, within_cone
-from perceptions.lane_detection.models import PerceptualFieldContext 
+from perceptions.lane_detection.models import PerceptualFieldContext
+
 """
 Reading from the dataset
 
 """
 dataset_path = f"{os.path.dirname(__file__)}/dataset/processed"
 
+
 # 1. Load the dataset (boundaries and cone maps)
 def load_numpy_data(path):
     return np.load(path)
+
+
 map_data = [load_numpy_data(f"{dataset_path}/data_{i}.npz") for i in range(1, 10)]
 
 # A cone map is a nx2 numpy array that maps point indices to their [x,y] position
-cone_maps = [mp['points'] for mp in map_data]
+cone_maps = [mp["points"] for mp in map_data]
 # A left boundary is an array of indices corresponding to the left track boundary
-left_boundaries = [mp['left_boundary_indices'] for mp in map_data]
+left_boundaries = [mp["left_boundary_indices"] for mp in map_data]
 # Same for right
-right_boundaries = [mp['right_boundary_indices'] for mp in map_data]
+right_boundaries = [mp["right_boundary_indices"] for mp in map_data]
 
 
-def build_adjacency_graph(cone_map, dmax=5.0):
+def build_adjacency_graph(cone_map, dmax=5.0) -> dict[int, list]:
     """
     Build adjacency graph from cone_map dictionary.
 
@@ -51,35 +55,40 @@ def build_adjacency_graph(cone_map, dmax=5.0):
 def subgraph_add(subgraph, point, graph):
     """
     Add a point and its neighbors to the subgraph.
-    
+
     Args:
         subgraph: Current subgraph dict
         point: Point id
-        graph: Adjacency list 
+        graph: Adjacency list
     """
     if point in subgraph:
         print("Subgraph add detected duplicate point")
         return subgraph
-    
-    #Create new entry
+
+    # Create new entry
     subgraph[point] = []
 
-    #Populate with all neighbors that are both in full graph and subgraph
+    # Populate with all neighbors that are both in full graph and subgraph
     for n in graph[point]:
         if n in subgraph:
             subgraph[point].append(n)
             subgraph[n].append(point)
-    
+
     return subgraph
 
 
-def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
-                                cone_map: np.ndarray, graph: Dict[int, List[int]],
-                                perceptual_range: float, cone_angle_rad:float = 120.0 * np.pi/180):
+def filter_points_within_range(
+    car_pos: np.array,
+    car_heading_rad: float,
+    cone_map: np.ndarray,
+    graph: Dict[int, List[int]],
+    perceptual_range: float,
+    cone_angle_rad: float = 120.0 * np.pi / 180,
+):
     """
     Returns:
     - Subgraph perceptual field
-    
+
     Args:
         left_point: Cone ID of the left boundary point to use as reference
         left_boundary: List of cone IDs that are left boundary
@@ -88,24 +97,27 @@ def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
         perceptual_range: Range in meters
         graph: Adjacency list
     """
-    # Store all points within the perceptual range 
+    # Store all points within the perceptual range
     subgraph = {}
     for id, point in enumerate(cone_map):
-        if (within_range(point, car_pos, perceptual_range) and within_cone(point, car_pos, car_heading_rad, cone_angle_rad)): 
+        if within_range(point, car_pos, perceptual_range) and within_cone(
+            point, car_pos, car_heading_rad, cone_angle_rad
+        ):
             subgraph = subgraph_add(subgraph, id, graph)
 
     return subgraph
 
+
 def get_closest(point_id, boundary, cone_map):
     """
-        Takes point id, boundary (list of indicies), and dictionary that maps ids to point locations
-        Returns the point closest to point_id within boundary, returns ID
-        Will return point_id if it is in the boundary, will return [] if no points in boundary
+    Takes point id, boundary (list of indicies), and dictionary that maps ids to point locations
+    Returns the point closest to point_id within boundary, returns ID
+    Will return point_id if it is in the boundary, will return [] if no points in boundary
     """
-    min_dist = float('inf')
+    min_dist = float("inf")
     closest_id = []
     pt = cone_map[point_id]
-    
+
     for id in boundary:
         point = cone_map[id]
         dist = np.linalg.norm(pt - point)
@@ -114,12 +126,13 @@ def get_closest(point_id, boundary, cone_map):
             closest_id = id
     return closest_id
 
+
 def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     """
-        Takes point on left boundary, entire right_boundary, cone_map, and optional noise parameters
-        Returns potential car position and heading in radians
-            position is midpoint between left point and closest right point
-            heading is perpendicular to the line between the left point and closest right point
+    Takes point on left boundary, entire right_boundary, cone_map, and optional noise parameters
+    Returns potential car position and heading in radians
+        position is midpoint between left point and closest right point
+        heading is perpendicular to the line between the left point and closest right point
     """
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
     closest_right_pt = cone_map[closest_right_id]
@@ -127,13 +140,19 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
 
     midpt = (left_pt + closest_right_pt) / 2
 
-    angle_noise = np.random.normal(loc=0.0, scale=10 * math.pi/ 180, size=None) if noise else 0.0
+    angle_noise = (
+        np.random.normal(loc=0.0, scale=10 * math.pi / 180, size=None) if noise else 0.0
+    )
 
-    #Perpendicular so negative reciprocal
-    flip = np.random.choice([-1,1]) if noise else 1.0
-    car_heading_rad = flip * math.atan2(
-        left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1]) + angle_noise
+    # Perpendicular so negative reciprocal
+    flip = np.random.choice([-1, 1]) if noise else 1.0
+    car_heading_rad = (
+        flip
+        * math.atan2(left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1])
+        + angle_noise
+    )
     return midpt, car_heading_rad
+
 
 def generate_perceptual_field_data(
     left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
