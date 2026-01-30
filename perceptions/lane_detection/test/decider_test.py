@@ -443,7 +443,14 @@ class TestEnumeratePathPairs(unittest.TestCase):
         self.assertIsNotNone(l_start)
         self.assertIsNotNone(r_start)
 
-        results = enumerate_path_pairs(ctx, l_start, r_start)
+        P = LaneCandidate(
+            left_path=[l_start],
+            right_path=[r_start],
+            left_visited=set(),
+            right_visited=set(),
+        )
+
+        results = enumerate_path_pairs(ctx, P)
 
         self.assertGreater(len(results), 0, "Should find valid path pair")
 
@@ -489,7 +496,14 @@ class TestEnumeratePathPairs(unittest.TestCase):
         self.assertIsNotNone(l_start)
         self.assertIsNotNone(r_start)
 
-        results = enumerate_path_pairs(ctx, l_start, r_start)
+        P = LaneCandidate(
+            left_path=[l_start],
+            right_path=[r_start],
+            left_visited=set(),
+            right_visited=set(),
+        )
+
+        results = enumerate_path_pairs(ctx, P)
 
         self.assertGreater(len(results), 0, "Should find valid path pair")
 
@@ -539,7 +553,14 @@ class TestEnumeratePathPairs(unittest.TestCase):
         self.assertIsNotNone(l_start)
         self.assertIsNotNone(r_start)
 
-        results = enumerate_path_pairs(ctx, l_start, r_start)
+        P = LaneCandidate(
+            left_path=[l_start],
+            right_path=[r_start],
+            left_visited=set(),
+            right_visited=set(),
+        )
+
+        results = enumerate_path_pairs(ctx, P)
 
         # Check that paths with sharp turns are filtered
         for candidate in results:
@@ -575,7 +596,14 @@ class TestEnumeratePathPairs(unittest.TestCase):
 
         l_start, r_start = find_starting_vertices(ctx, max_range=5.0)
 
-        results = enumerate_path_pairs(ctx, left_start=l_start, right_start=r_start)
+        P = LaneCandidate(
+            left_path=[l_start],
+            right_path=[r_start],
+            left_visited=set(),
+            right_visited=set(),
+        )
+
+        results = enumerate_path_pairs(ctx, P)
         self.assertEqual(
             len(results), 0, "Should return empty for no starting vertices"
         )

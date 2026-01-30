@@ -196,8 +196,7 @@ def left_right_decider(
 
 
 
-def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate,
-                         V: tuple = None, it_max: int = 2500):
+def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: int = 2500):
     """Implements Algorithm 2: Enumerate path pairs which satisfy constraints.
     
     Line-by-line implementation of Algorithm 2 from the paper.
@@ -205,7 +204,6 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate,
     Args:
         ctx: Perceptual field context G (adjacency list ctx.adj_list)
         P: Current path pair (LaneCandidate with left_path, right_path)
-        V: Pair of visited sets (left_visited, right_visited), initially ({}, {})
         it_max: Maximum iteration limit (default 2500)
     
     Returns:
