@@ -508,21 +508,23 @@ class TestEnumeratePathPairs(unittest.TestCase):
         self.assertGreater(len(results), 0, "Should find valid path pair")
 
         for candidate in results:
-            if 1 in candidate.left_path and 3 in candidate.right_path:
-                self.assertFalse(candidate.is_valid),
-                "Path with narrow section should fail width constraint and be marked invalid"
+            if 2 in candidate.left_path and 5 in candidate.right_path:
+                self.assertFalse(
+                    candidate.is_valid,
+                    "Path with narrow section should fail width constraint and be marked invalid",
+                )
 
     def test_sharp_turn_bt(self):
         """Test 3: Sharp turn (>90º) should bt due to C_seg
 
         Expected: Paths with >90º turns should be marked invalid
         """
-        # Left: (0,0), (5,0), (4,4)
+        # Left: (0,2.5), (5,2.5), (4,4)
         # Right: (0,-2.5), (5,-2.5), (10,-2.5), (8,3)
         cone_map = np.array(
             [
-                [0.0, 0.0],  # left[0]
-                [5.0, 0.0],  # left[1]
+                [0.0, 2.5],  # left[0] - left of car heading
+                [5.0, 2.5],  # left[1]
                 [4.0, 4.0],  # left[2] - creates >90° turn
                 [0.0, -2.5],  # right[0]
                 [5.0, -2.5],  # right[1]
