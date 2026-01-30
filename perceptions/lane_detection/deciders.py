@@ -214,7 +214,7 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
     # Helper to initialize and manage global state for recursion
     class EPPState:
         def __init__(self):
-            self.Phi = set()  # Line 1: Φ ← ∅
+            self.Phi = []  # Line 1: Φ ← ∅
             self.i = 0  # Line 2: i ← 0 (iteration counter)
     
     state = EPPState()
@@ -308,7 +308,7 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
         if (C_seg(P_new, ctx, side="left") and
             C_seg(P_new, ctx, side="right") and
             C_poly(P_new, ctx) and C_width(P_new, ctx)):
-            state.Phi.add(P_new)
+            state.Phi.append(P_new)
         
             # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
 
