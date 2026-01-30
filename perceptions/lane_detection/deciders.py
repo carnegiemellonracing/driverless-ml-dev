@@ -310,18 +310,18 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
             C_poly(P_new, ctx) and C_width(P_new, ctx)):
             state.Phi.append(P_new)
         
-            # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
+        # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
 
-            violation_in_fixed = True # TODO FIX
-            should_backtrack = backtracking_decider(
-                min_width=min_w,
-                max_width=max_w,
-                violation_in_fixed_set=violation_in_fixed
-            )
-            
-            if not should_backtrack:
-                # Line 23: Γ ← Γ ∪ EPP(G, P, V, i)
-                _enumerate(P_new)
+        violation_in_fixed = True # TODO FIX
+        should_backtrack = backtracking_decider(
+            min_width=min_w,
+            max_width=max_w,
+            violation_in_fixed_set=violation_in_fixed
+        )
+        
+        if not should_backtrack:
+            # Line 23: Γ ← Γ ∪ EPP(G, P, V, i)
+            _enumerate(P_new)
         
         # Line 24: P[s].pop()
         # (Implicit in recursion: we return and don't modify P_new further)
