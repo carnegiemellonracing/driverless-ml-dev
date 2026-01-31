@@ -1,9 +1,11 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
+
+from perceptions.lane_detection.data_loader import generate_all_perceptual_field_data
 from perceptions.lane_detection.dataset import LaneDetectionDataset
 from perceptions.lane_detection.model import ConeClassifier
 
@@ -13,8 +15,8 @@ def train_model(
     val_dataset,
     model,
     epochs=250,
-    batch_size=128,
-    learning_rate=0.0015,
+    batch_size=32,
+    learning_rate=0.005,
     L=50,
     optimizer_=optim.Adam,
 ):
@@ -227,28 +229,42 @@ def main(mode="train", model_path="model.pth"):
     mode: 'train' to train a new model, 'eval' to only evaluate existing model
     model_path: path to the saved model file
     """
-    # --- Generate dataset from all maps ---
-    print("Loading and generating dataset...")
-    full_dataset = LaneDetectionDataset(perceptual_range=30)
+    # --- Generate dataset from all maps (Context-based split) ---
+    print("Loading and generating dataset contexts...")
+    # 1. Generate ALL contexts first
+    all_contexts = generate_all_perceptual_field_data(perceptual_range=30)
 
-    if len(full_dataset) == 0:
+    if len(all_contexts) == 0:
         print("Error: No training data generated!")
         return
 
-    # --- Create Train/Validation Split ---
-    dataset_size = len(full_dataset)
-    indices = list(range(dataset_size))
-    split = int(np.floor(0.8 * dataset_size))  # 80% train, 20% validation
-    np.random.seed(42)  # for reproducibility
-    np.random.shuffle(indices)
-    train_indices, val_indices = indices[:split], indices[split:]
+    # 2. Split CONTEXTS (not pairs) to prevent data leakage
+    # A context is a secific location on the map. We want the model to generalize to new locations.
+    total_contexts = len(all_contexts)
+    indices = list(range(total_contexts))
+    split = int(np.floor(0.8 * total_contexts))  # 80% train, 20% validation
 
-    # Create train and validation datasets with augmentation for training
+    np.random.seed(42)
+    np.random.shuffle(indices)
+
+    train_indices = indices[:split]
+    val_indices = indices[split:]
+
+    train_contexts = [all_contexts[i] for i in train_indices]
+    val_contexts = [all_contexts[i] for i in val_indices]
+
+    print(f"Total Contexts: {total_contexts}")
+    print(f"Training Contexts: {len(train_contexts)}")
+    print(f"Validation Contexts: {len(val_contexts)}")
+
+    # 3. Create Datasets from split contexts
+    # Train dataset gets augmentation
     train_dataset = LaneDetectionDataset(
-        data=[full_dataset.data[i] for i in train_indices], augment=True
+        contexts=train_contexts, augment=True, perceptual_range=30
     )
+    # Validation dataset gets NO augmentation
     val_dataset = LaneDetectionDataset(
-        data=[full_dataset.data[i] for i in val_indices], augment=False
+        contexts=val_contexts, augment=False, perceptual_range=30
     )
 
     if mode == "eval":

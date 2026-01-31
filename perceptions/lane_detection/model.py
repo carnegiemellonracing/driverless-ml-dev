@@ -1,15 +1,19 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 # 4. Define the model architecture with regularization
 class ConeClassifier(nn.Module):
     def __init__(self):
         super(ConeClassifier, self).__init__()
-        # Fully connected layers with reduced complexity
+        # Fully connected layers with regularization
+        self.bn = nn.BatchNorm1d(8)
         self.fc1 = nn.Linear(8, 100)  # , bias=False
         self.fc2 = nn.Linear(100, 1)
 
     def forward(self, x):
+        # Normalize inputs
+        x = self.bn(x)
         # Fully connected layers
         x = self.fc1(x)
         x = F.relu(x)
