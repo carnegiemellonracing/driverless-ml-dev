@@ -4,7 +4,7 @@ import numpy as np
 import math
 from typing import Any, Dict, List
 from perceptions.lane_detection.geo import within_range, within_cone
-from perceptions.lane_detection.models import PerceptualFieldContext
+from perceptions.lane_detection.models import PerceptualFieldContext, Lane, Map, Graph, Point
 
 """
 Reading from the dataset
@@ -28,7 +28,7 @@ left_boundaries = [mp["left_boundary_indices"] for mp in map_data]
 right_boundaries = [mp["right_boundary_indices"] for mp in map_data]
 
 
-def build_adjacency_graph(cone_map, dmax=5.0) -> dict[int, list]:
+def build_adjacency_graph(cone_map: Map, dmax=5.0) -> Graph:
     """
     Build adjacency graph from cone_map dictionary.
 
@@ -52,7 +52,7 @@ def build_adjacency_graph(cone_map, dmax=5.0) -> dict[int, list]:
     return adjacency_list
 
 
-def subgraph_add(subgraph, point, graph):
+def subgraph_add(subgraph: Map, point: Point, graph: Graph):
     """
     Add a point and its neighbors to the subgraph.
 
@@ -78,13 +78,13 @@ def subgraph_add(subgraph, point, graph):
 
 
 def filter_points_within_range(
-    car_pos: np.array,
+    car_pos: Point,
     car_heading_rad: float,
-    cone_map: np.ndarray,
-    graph: Dict[int, List[int]],
+    cone_map: Map,
+    graph: Graph,
     perceptual_range: float,
     cone_angle_rad: float = 120.0 * np.pi / 180,
-):
+) -> Graph:
     """
     Returns:
     - Subgraph perceptual field
@@ -108,7 +108,7 @@ def filter_points_within_range(
     return subgraph
 
 
-def get_closest(point_id, boundary, cone_map):
+def get_closest(point_id: int, boundary: Lane, cone_map: Map) -> int:
     """
     Takes point id, boundary (list of indicies), and dictionary that maps ids to point locations
     Returns the point closest to point_id within boundary, returns ID
@@ -127,7 +127,7 @@ def get_closest(point_id, boundary, cone_map):
     return closest_id
 
 
-def get_car_pos(left_id, right_boundary, cone_map, noise=False):
+def get_car_pos(left_id, right_boundary, cone_map, noise=False) -> tuple[Point, float]:
     """
     Takes point on left boundary, entire right_boundary, cone_map, and optional noise parameters
     Returns potential car position and heading in radians
@@ -155,7 +155,7 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
 
 
 def generate_perceptual_field_data(
-    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
+    left_boundary: Lane, right_boundary: Lane, cone_map: Map, perceptual_range: float =30.0, dmax: float =5
 ) -> List[PerceptualFieldContext]:
     """
     Take a left and right boundary, the cone map, and some params.
@@ -191,6 +191,8 @@ def generate_perceptual_field_data(
             adj_list=subgraph,
             car_pos=car_pos,
             car_heading=car_heading_rad,
+            left_boundary=set(left_boundary) & visible_indices,
+            right_boundary=set(right_boundary) & visible_indices
         )
         contexts.append(ctx)
 

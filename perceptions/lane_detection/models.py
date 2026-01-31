@@ -82,6 +82,9 @@ class PerceptualFieldContext:
     # Optional: NVD cache for neighbor sorting during path enumeration
     nvd_cache: Dict[Tuple[int, int], List[int]] = field(default_factory=dict)
 
+    left_boundary: Set[int] = field(default_factory=set)
+    right_boundary: Set[int] = field(default_factory=set)
+
     def get_point(self, global_idx: int) -> np.ndarray:
         """Get point coordinates by global index (direct access to shared map)."""
         return self.cone_map[global_idx]
