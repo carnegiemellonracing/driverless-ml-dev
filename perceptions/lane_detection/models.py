@@ -10,6 +10,7 @@ Map = Annotated[npt.NDArray[np.float64], Literal[..., 2]]
 Lane = List[Point]  # A lane is a list of points
 Graph = Dict[int, List[int]]
 
+
 class Side(Enum):
     LEFT = "left"
     RIGHT = "right"

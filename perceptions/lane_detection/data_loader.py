@@ -195,3 +195,30 @@ def generate_perceptual_field_data(
         contexts.append(ctx)
 
     return contexts
+
+
+def generate_all_perceptual_field_data(
+    perceptual_range: int = 30, dmax: float = 5.0
+) -> List[PerceptualFieldContext]:
+    """
+    Generate perceptual field data for all loaded maps.
+
+    This is a convenience function that iterates over all loaded
+    left_boundaries, right_boundaries, and cone_maps.
+
+    Args:
+        perceptual_range: Range in meters for visibility
+        dmax: Maximum distance for adjacency graph
+
+    Returns:
+        List of PerceptualFieldContext objects from all maps
+    """
+    all_contexts = []
+    for left_boundary, right_boundary, cone_map in zip(
+        left_boundaries, right_boundaries, cone_maps
+    ):
+        contexts = generate_perceptual_field_data(
+            left_boundary, right_boundary, cone_map, perceptual_range, dmax
+        )
+        all_contexts.extend(contexts)
+    return all_contexts

@@ -26,9 +26,10 @@ from perceptions.lane_detection.ranker import extract_features
 
 
 class Classifier:
-"""
-:param dmax: Maximum distance threshold for adjacency (default: 5.0m)
-"""
+    """
+    :param dmax: Maximum distance threshold for adjacency (default: 5.0m)
+    """
+
     def __init__(self, dmax=5.0):
         print("Classifier Initialized.")
 
