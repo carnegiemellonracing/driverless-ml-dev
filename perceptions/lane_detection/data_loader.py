@@ -4,7 +4,13 @@ import numpy as np
 import math
 from typing import Any, Dict, List
 from perceptions.lane_detection.geo import within_range, within_cone
-from perceptions.lane_detection.models import PerceptualFieldContext, Lane, Map, Graph, Point
+from perceptions.lane_detection.models import (
+    PerceptualFieldContext,
+    Lane,
+    Map,
+    Graph,
+    Point,
+)
 
 """
 Reading from the dataset
@@ -140,6 +146,14 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False) -> tuple[Point, 
 
     midpt = (left_pt + closest_right_pt) / 2
 
+    if noise:
+        # Add lateral noise (shift towards left or right boundary)
+        # Vector from left to right
+        vec = closest_right_pt - left_pt
+        # Random shift between -20% and +20% of lane width
+        shift = (np.random.random() - 0.5) * 0.4
+        midpt = midpt + vec * shift
+
     angle_noise = (
         np.random.normal(loc=0.0, scale=10 * math.pi / 180, size=None) if noise else 0.0
     )
@@ -155,7 +169,12 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False) -> tuple[Point, 
 
 
 def generate_perceptual_field_data(
-    left_boundary: Lane, right_boundary: Lane, cone_map: Map, perceptual_range: float =30.0, dmax: float =5
+    left_boundary: Lane,
+    right_boundary: Lane,
+    cone_map: Map,
+    perceptual_range: float = 30.0,
+    dmax: float = 5,
+    samples_per_point: int = 1,
 ) -> List[PerceptualFieldContext]:
     """
     Take a left and right boundary, the cone map, and some params.
@@ -177,50 +196,108 @@ def generate_perceptual_field_data(
 
     # Generate a perceptual field for each left boundary point
     for left_id in left_boundary:
-        car_pos, car_heading_rad = get_car_pos(left_id, right_boundary, cone_map)
-        subgraph = filter_points_within_range(
-            car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
-        )
+        for i in range(samples_per_point):
+            # Use noise for all samples if we are oversampling,
+            # but keep the first one clean if we only want 1 sample?
+            # Actually, if samples_per_point > 1, let's make i=0 clean and others noisy.
+            use_noise = i > 0 if samples_per_point > 1 else False
 
-        # Get the set of visible indices from the subgraph
-        visible_indices = set(subgraph.keys())
+            car_pos, car_heading_rad = get_car_pos(
+                left_id, right_boundary, cone_map, noise=use_noise
+            )
+            subgraph = filter_points_within_range(
+                car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
+            )
 
-        ctx = PerceptualFieldContext(
-            cone_map=cone_map,
-            visible_indices=visible_indices,
-            adj_list=subgraph,
-            car_pos=car_pos,
-            car_heading=car_heading_rad,
-            left_boundary=set(left_boundary) & visible_indices,
-            right_boundary=set(right_boundary) & visible_indices
-        )
-        contexts.append(ctx)
+            # Skip empty graphs
+            if len(subgraph) < 3:
+                continue
+
+            # Get the set of visible indices from the subgraph
+            visible_indices = set(subgraph.keys())
+
+            ctx = PerceptualFieldContext(
+                cone_map=cone_map,
+                visible_indices=visible_indices,
+                adj_list=subgraph,
+                car_pos=car_pos,
+                car_heading=car_heading_rad,
+                left_boundary=set(left_boundary) & visible_indices,
+                right_boundary=set(right_boundary) & visible_indices,
+            )
+            contexts.append(ctx)
 
     return contexts
 
 
+def generate_data_for_maps(
+    map_indices: List[int] = None,
+    perceptual_range: int = 30,
+    dmax: float = 5.0,
+    samples_per_point: int = 1,
+    augment_mirror: bool = False,
+) -> List[PerceptualFieldContext]:
+    """
+    Generate perceptual field data for specified maps.
+
+    Args:
+        map_indices: List of indices (0-based) of maps to use. If None, uses all.
+        perceptual_range: Range in meters
+        dmax: Graph adjacency max distance
+        samples_per_point: Number of samples per boundary point (1 = clean, >1 = noisy samples)
+        augment_mirror: Whether to generate mirrored (flipped Y) versions of maps
+
+    Returns:
+        List of PerceptualFieldContext objects
+    """
+    all_contexts = []
+
+    total_maps = len(cone_maps)
+    if map_indices is None:
+        map_indices = range(total_maps)
+
+    for idx in map_indices:
+        if idx < 0 or idx >= total_maps:
+            continue
+
+        left_boundary = left_boundaries[idx]
+        right_boundary = right_boundaries[idx]
+        cone_map = cone_maps[idx]
+
+        # 1. Original Map
+        contexts = generate_perceptual_field_data(
+            left_boundary,
+            right_boundary,
+            cone_map,
+            perceptual_range,
+            dmax,
+            samples_per_point=samples_per_point,
+        )
+        all_contexts.extend(contexts)
+
+        # 2. Mirrored Map (Optional)
+        if augment_mirror:
+            mirrored_map = cone_map.copy()
+            mirrored_map[:, 1] *= -1  # Invert Y coordinate
+
+            # Swap left and right boundaries for the mirrored map
+            contexts_mirror = generate_perceptual_field_data(
+                right_boundary,
+                left_boundary,
+                mirrored_map,
+                perceptual_range,
+                dmax,
+                samples_per_point=samples_per_point,
+            )
+            all_contexts.extend(contexts_mirror)
+
+    return all_contexts
+
+
+# Backwards compatibility wrapper if needed, or update call sites
 def generate_all_perceptual_field_data(
     perceptual_range: int = 30, dmax: float = 5.0
 ) -> List[PerceptualFieldContext]:
-    """
-    Generate perceptual field data for all loaded maps.
-
-    This is a convenience function that iterates over all loaded
-    left_boundaries, right_boundaries, and cone_maps.
-
-    Args:
-        perceptual_range: Range in meters for visibility
-        dmax: Maximum distance for adjacency graph
-
-    Returns:
-        List of PerceptualFieldContext objects from all maps
-    """
-    all_contexts = []
-    for left_boundary, right_boundary, cone_map in zip(
-        left_boundaries, right_boundaries, cone_maps
-    ):
-        contexts = generate_perceptual_field_data(
-            left_boundary, right_boundary, cone_map, perceptual_range, dmax
-        )
-        all_contexts.extend(contexts)
-    return all_contexts
+    return generate_data_for_maps(
+        None, perceptual_range, dmax, samples_per_point=5, augment_mirror=True
+    )
