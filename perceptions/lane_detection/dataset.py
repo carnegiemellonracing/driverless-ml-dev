@@ -14,7 +14,7 @@ import itertools
 from perceptions.lane_detection.models import LaneCandidate, PerceptualFieldContext
 from perceptions.lane_detection.geo import find_starting_vertices
 from perceptions.lane_detection.deciders import enumerate_path_pairs
-from perceptions.lane_detection.ranker import extract_features
+from perceptions.lane_detection.ranker import extract_features, IoU
 from perceptions.lane_detection.data_loader import (
     generate_all_perceptual_field_data,
     left_boundaries,
@@ -138,10 +138,11 @@ class LaneDetectionDataset(Dataset):
             for candidate in candidates:
                 features = extract_features(candidate, ctx)
                 # Placeholder IoU - in production, compute against ground truth
-                # Using path length as proxy for now
-                iou = min(
-                    1.0, (len(candidate.left_path) + len(candidate.right_path)) / 20.0
-                )
+                # Using path length as proxy for 
+                iou = IoU(ctx, candidate)
+                # iou = min(
+                #     1.0, (len(candidate.left_path) + len(candidate.right_path)) / 20.0
+                # )
                 candidate_data.append((features.numpy(), iou))
 
             # Create pairwise combinations
