@@ -21,16 +21,16 @@ def train_model(
     L=50,
     optimizer_=optim.AdamW,
     eta_min=1e-6,
-    patience=50,
+    patience=20,
 ):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     # Add weight decay for L2 regularization
-    optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     # Add learning rate scheduler
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer=optimizer, T_max=epochs, eta_min=eta_min
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer, mode="min", factor=0.3, patience=10
     )
     # Binary cross entropy loss for pairwise ranking
     # We're predicting probability that candidate 1 is better than candidate 2
@@ -50,6 +50,22 @@ def train_model(
 
     print(f"Starting training with early stopping patience: {patience} epochs")
     print(f"Minimum improvement threshold: {min_delta}")
+
+    # Debug: Check class distribution
+    train_pos = sum(
+        1 for _, iou_pair in train_dataset.data if iou_pair[0] > iou_pair[1]
+    )
+    train_total = len(train_dataset)
+    val_pos = sum(1 for _, iou_pair in val_dataset.data if iou_pair[0] > iou_pair[1])
+    val_total = len(val_dataset)
+    print(f"\n=== Class Distribution Debug ===")
+    print(
+        f"Train: {train_pos}/{train_total} ({100*train_pos/train_total:.1f}%) have IoU1 > IoU2"
+    )
+    print(
+        f"Val:   {val_pos}/{val_total} ({100*val_pos/val_total:.1f}%) have IoU1 > IoU2"
+    )
+    print(f"================================\n")
 
     for epoch in range(epochs):
         model.train()
@@ -121,7 +137,7 @@ def train_model(
 
         # Update learning rate based on validation loss
         old_lr = optimizer.param_groups[0]["lr"]
-        scheduler.step()
+        scheduler.step(val_loss)
         new_lr = optimizer.param_groups[0]["lr"]
 
         # Log learning rate changes
@@ -186,43 +202,73 @@ def train_model(
     # Plot training metrics
     if epoch_numbers:  # Only plot if we have at least one epoch
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        
+
         # Top-left: Training and Validation Loss
-        axes[0, 0].plot(epoch_numbers, train_losses, label='Training Loss', marker='o', markersize=3)
-        axes[0, 0].plot(epoch_numbers, val_losses, label='Validation Loss', marker='s', markersize=3)
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].set_title('Training and Validation Loss')
+        axes[0, 0].plot(
+            epoch_numbers, train_losses, label="Training Loss", marker="o", markersize=3
+        )
+        axes[0, 0].plot(
+            epoch_numbers, val_losses, label="Validation Loss", marker="s", markersize=3
+        )
+        axes[0, 0].set_xlabel("Epoch")
+        axes[0, 0].set_ylabel("Loss")
+        axes[0, 0].set_title("Training and Validation Loss")
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
-        
+
         # Top-right: Training and Validation Accuracy
-        axes[0, 1].plot(epoch_numbers, train_accuracies, label='Training Accuracy', marker='o', markersize=3)
-        axes[0, 1].plot(epoch_numbers, val_accuracies, label='Validation Accuracy', marker='s', markersize=3)
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('Accuracy (%)')
-        axes[0, 1].set_title('Training and Validation Accuracy')
+        axes[0, 1].plot(
+            epoch_numbers,
+            train_accuracies,
+            label="Training Accuracy",
+            marker="o",
+            markersize=3,
+        )
+        axes[0, 1].plot(
+            epoch_numbers,
+            val_accuracies,
+            label="Validation Accuracy",
+            marker="s",
+            markersize=3,
+        )
+        axes[0, 1].set_xlabel("Epoch")
+        axes[0, 1].set_ylabel("Accuracy (%)")
+        axes[0, 1].set_title("Training and Validation Accuracy")
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
-        
+
         # Bottom-left: Training Loss Only (zoomed)
-        axes[1, 0].plot(epoch_numbers, train_losses, label='Training Loss', marker='o', markersize=3, color='tab:blue')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('Loss')
-        axes[1, 0].set_title('Training Loss (Zoomed)')
+        axes[1, 0].plot(
+            epoch_numbers,
+            train_losses,
+            label="Training Loss",
+            marker="o",
+            markersize=3,
+            color="tab:blue",
+        )
+        axes[1, 0].set_xlabel("Epoch")
+        axes[1, 0].set_ylabel("Loss")
+        axes[1, 0].set_title("Training Loss (Zoomed)")
         axes[1, 0].legend()
         axes[1, 0].grid(True, alpha=0.3)
-        
+
         # Bottom-right: Validation Loss Only (zoomed)
-        axes[1, 1].plot(epoch_numbers, val_losses, label='Validation Loss', marker='s', markersize=3, color='tab:orange')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Loss')
-        axes[1, 1].set_title('Validation Loss (Zoomed)')
+        axes[1, 1].plot(
+            epoch_numbers,
+            val_losses,
+            label="Validation Loss",
+            marker="s",
+            markersize=3,
+            color="tab:orange",
+        )
+        axes[1, 1].set_xlabel("Epoch")
+        axes[1, 1].set_ylabel("Loss")
+        axes[1, 1].set_title("Validation Loss (Zoomed)")
         axes[1, 1].legend()
         axes[1, 1].grid(True, alpha=0.3)
-        
+
         plt.tight_layout()
-        plt.savefig('training_metrics.png', dpi=100)
+        plt.savefig("training_metrics.png", dpi=100)
         print("Training metrics plot saved to 'training_metrics.png'")
         plt.close()
 
@@ -288,40 +334,56 @@ def main(mode="train", model_path="model.pth"):
     mode: 'train' to train a new model, 'eval' to only evaluate existing model
     model_path: path to the saved model file
     """
-    # --- Generate dataset from all maps (Context-based split) ---
+    # --- Generate dataset from all maps (Map-based split to prevent leakage) ---
     print("Loading and generating dataset contexts...")
-    # 1. Generate ALL contexts first
-    all_contexts = generate_all_perceptual_field_data(perceptual_range=30)
 
-    if len(all_contexts) == 0:
-        print("Error: No training data generated!")
-        return
+    # 1. Split MAP INDICES (not contexts)
+    # We have maps 0..N-1 in the loader
+    from perceptions.lane_detection.data_loader import generate_data_for_maps, cone_maps
 
-    # 2. Split CONTEXTS (not pairs) to prevent data leakage
-    # A context is a secific location on the map. We want the model to generalize to new locations.
-    total_contexts = len(all_contexts)
-    indices = list(range(total_contexts))
-    split = int(np.floor(0.8 * total_contexts))  # 80% train, 20% validation
+    total_maps = len(cone_maps)
+    indices = list(range(total_maps))
+    split = int(np.floor(0.7 * total_maps))  # 70% train maps, 30% validation maps
 
     np.random.seed(42)
     np.random.shuffle(indices)
 
-    train_indices = indices[:split]
-    val_indices = indices[split:]
+    train_map_indices = indices[:split]
+    val_map_indices = indices[split:]
 
-    train_contexts = [all_contexts[i] for i in train_indices]
-    val_contexts = [all_contexts[i] for i in val_indices]
+    print(f"Total Maps: {total_maps}")
+    print(f"Training Maps: {train_map_indices}")
+    print(f"Validation Maps: {val_map_indices}")
 
-    print(f"Total Contexts: {total_contexts}")
+    # 2. Generate Contexts specifically for each split
+    # Train: Standard data (Leakage fixed via map split, but no synthetic augmentation)
+    print("Generating Training Data (Standard)...")
+    train_contexts = generate_data_for_maps(
+        train_map_indices,
+        perceptual_range=30,
+        samples_per_point=1,  # Reverted to 1
+        augment_mirror=False,  # Reverted to False
+    )
+
+    # Validation: Clean (Single sample, No mirroring - purely evaluation)
+    # Validating on mirrored data is arguably good, but let's stick to standard maps first for stability
+    print("Generating Validation Data (Clean)...")
+    val_contexts = generate_data_for_maps(
+        val_map_indices,
+        perceptual_range=30,
+        samples_per_point=1,  # Clean samples only
+        augment_mirror=False,  # No mirroring
+    )
+
     print(f"Training Contexts: {len(train_contexts)}")
     print(f"Validation Contexts: {len(val_contexts)}")
 
-    # 3. Create Datasets from split contexts
-    # Train dataset gets augmentation
+    # 3. Create Datasets
+    # Note: Dataset class also has 'augment' flag which adds feature noise.
+    # We keep that for training (regularization), disable for val.
     train_dataset = LaneDetectionDataset(
         contexts=train_contexts, augment=True, perceptual_range=30
     )
-    # Validation dataset gets NO augmentation
     val_dataset = LaneDetectionDataset(
         contexts=val_contexts, augment=False, perceptual_range=30
     )
@@ -342,8 +404,8 @@ def main(mode="train", model_path="model.pth"):
             val_dataset,
             model,
             epochs=250,
-            batch_size=32,
-            learning_rate=0.001,
+            batch_size=1024,
+            learning_rate=0.0005,
             L=50,
         )
 
@@ -360,8 +422,8 @@ def main(mode="train", model_path="model.pth"):
                 "model_state_dict": model.state_dict(),
                 "final_config": {
                     "input_size": 8,
-                    "fc1_size": 800,
-                    "fc2_size": 100,
+                    "fc1_size": 128,
+                    "fc2_size": 64,
                     "output_size": 1,
                 },
             },

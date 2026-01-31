@@ -8,13 +8,145 @@ from perceptions.lane_detection.geo import (
 )
 
 
-def IoU(ctx: PerceptualFieldContext, candidate: LaneCandidate) -> float:
-    I = len(ctx.left_boundary & set(candidate.left_path)) + len(ctx.right_boundary & set(candidate.right_path))
-    U = len(ctx.left_boundary | set(candidate.left_path)) + len(ctx.right_boundary | set(candidate.right_path))
-    if U == 0:
-        return 0
-    return I/U
-    
+def _path_length(points: list) -> float:
+    """Compute total length of a path defined by points."""
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(len(points) - 1):
+        total += np.linalg.norm(points[i + 1] - points[i])
+    return total
+
+
+def _point_to_path_distance(point: np.ndarray, path_points: list) -> float:
+    """Compute minimum distance from a point to a polyline path."""
+    if len(path_points) == 0:
+        return float("inf")
+    if len(path_points) == 1:
+        return np.linalg.norm(point - path_points[0])
+
+    min_dist = float("inf")
+    for i in range(len(path_points) - 1):
+        dist, _ = point_to_segment_distance(point, path_points[i], path_points[i + 1])
+        min_dist = min(min_dist, dist)
+    return min_dist
+
+
+def _compute_path_coverage(
+    gt_points: list, cand_points: list, threshold: float = 1.5
+) -> float:
+    """
+    Compute what fraction of the ground truth path is "covered" by the candidate path.
+
+    Coverage is measured by sampling points along the GT path and checking
+    what fraction are within `threshold` distance of the candidate path.
+
+    Args:
+        gt_points: List of ground truth path points
+        cand_points: List of candidate path points
+        threshold: Distance threshold for considering a point "covered" (meters)
+
+    Returns:
+        Coverage ratio in [0, 1]
+    """
+    if len(gt_points) < 2 or len(cand_points) < 2:
+        # If candidate has fewer than 2 points, check vertex overlap
+        if len(cand_points) == 0:
+            return 0.0
+        # Check if GT points are near the candidate point(s)
+        covered = 0
+        for gt_pt in gt_points:
+            min_dist = min(np.linalg.norm(gt_pt - cp) for cp in cand_points)
+            if min_dist <= threshold:
+                covered += 1
+        return covered / len(gt_points) if gt_points else 0.0
+
+    # Sample points along the GT path
+    gt_length = _path_length(gt_points)
+    if gt_length == 0:
+        return 1.0 if len(cand_points) > 0 else 0.0
+
+    # Sample every 0.5m along GT path
+    sample_interval = 0.5
+    num_samples = max(int(gt_length / sample_interval), len(gt_points))
+
+    covered_length = 0.0
+    accumulated_length = 0.0
+
+    for i in range(len(gt_points) - 1):
+        seg_start = gt_points[i]
+        seg_end = gt_points[i + 1]
+        seg_length = np.linalg.norm(seg_end - seg_start)
+
+        if seg_length == 0:
+            continue
+
+        # Sample along this segment
+        num_seg_samples = max(2, int(seg_length / sample_interval) + 1)
+        for j in range(num_seg_samples):
+            t = j / (num_seg_samples - 1) if num_seg_samples > 1 else 0
+            sample_point = seg_start + t * (seg_end - seg_start)
+
+            # Check distance to candidate path
+            dist = _point_to_path_distance(sample_point, cand_points)
+            if dist <= threshold:
+                covered_length += seg_length / num_seg_samples
+
+        accumulated_length += seg_length
+
+    return min(covered_length / gt_length, 1.0) if gt_length > 0 else 0.0
+
+
+def IoU(
+    ctx: PerceptualFieldContext, candidate: LaneCandidate, threshold: float = 1.5
+) -> float:
+    """
+    Compute geometric IoU between candidate and ground truth boundaries.
+
+    This measures how well the candidate paths align with the ground truth
+    lane boundaries using path coverage. Unlike vertex-based IoU, this
+    properly handles cases where the candidate uses different intermediate
+    vertices but still traces the correct geometric path.
+
+    Args:
+        ctx: PerceptualFieldContext with ground truth boundaries
+        candidate: LaneCandidate to evaluate
+        threshold: Distance threshold for considering coverage (meters)
+
+    Returns:
+        IoU score in [0, 1], computed as average of left and right coverage
+    """
+    # Get ground truth paths as ordered point sequences
+    # Sort by x-coordinate as a proxy for path ordering (assumes forward direction)
+    gt_left_indices = sorted(ctx.left_boundary, key=lambda i: ctx.get_point(i)[0])
+    gt_right_indices = sorted(ctx.right_boundary, key=lambda i: ctx.get_point(i)[0])
+
+    gt_left_points = [ctx.get_point(i) for i in gt_left_indices]
+    gt_right_points = [ctx.get_point(i) for i in gt_right_indices]
+
+    # Get candidate paths
+    cand_left_points = [ctx.get_point(i) for i in candidate.left_path]
+    cand_right_points = [ctx.get_point(i) for i in candidate.right_path]
+
+    # Compute coverage for each side
+    left_coverage = _compute_path_coverage(gt_left_points, cand_left_points, threshold)
+    right_coverage = _compute_path_coverage(
+        gt_right_points, cand_right_points, threshold
+    )
+
+    # Average coverage as IoU proxy
+    # Weight by path lengths if they differ significantly
+    gt_left_len = _path_length(gt_left_points)
+    gt_right_len = _path_length(gt_right_points)
+    total_len = gt_left_len + gt_right_len
+
+    if total_len == 0:
+        return 0.0
+
+    # Weighted average by path length
+    iou = (left_coverage * gt_left_len + right_coverage * gt_right_len) / total_len
+    return iou
+
 
 def get_path_stats(path_indices: list[int], context: PerceptualFieldContext):
     """

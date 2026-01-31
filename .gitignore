@@ -211,3 +211,5 @@ ml_data/
 
 # Model Checkpoints
 *.pth
+training_metrics.png
+evaluation_results/

@@ -144,22 +144,30 @@ class LaneDetectionDataset(Dataset):
                 candidate_data.append((features.numpy(), iou))
 
             # Create pairwise combinations
+            pair_idx = 0
             for (feat1, iou1), (feat2, iou2) in itertools.combinations(
                 candidate_data, 2
             ):
-                # Randomly swap to ensure class balance (p(c1 > c2) ~= 0.5)
-                if np.random.random() > 0.5:
-                    feat1, feat2 = feat2, feat1
-                    iou1, iou2 = iou2, iou1
-
-                # Skip ambiguous pairs where IoU difference is small
+                # Skip ambiguous pairs where IoU difference is small FIRST
                 # This reduces label noise by ignoring "ties"
                 if abs(iou1 - iou2) < 0.05:
                     continue
 
+                # Deterministic ordering: always put higher IoU first
+                if iou1 < iou2:
+                    feat1, feat2 = feat2, feat1
+                    iou1, iou2 = iou2, iou1
+
+                # Now swap exactly 50% using pair index for determinism
+                # This ensures class balance: 50% have iou1 > iou2, 50% have iou1 < iou2
+                if pair_idx % 2 == 0:
+                    feat1, feat2 = feat2, feat1
+                    iou1, iou2 = iou2, iou1
+
                 feature_pairs = np.stack([feat1, feat2], axis=0)  # (2, 8)
                 iou_pairs = np.array([iou1, iou2], dtype=np.float32)  # (2,)
                 data.append((feature_pairs, iou_pairs))
+                pair_idx += 1
 
             if (ctx_idx + 1) % 10 == 0:
                 print(
