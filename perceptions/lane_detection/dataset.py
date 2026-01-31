@@ -137,16 +137,10 @@ class LaneDetectionDataset(Dataset):
                 continue
 
             # Compute features and IoU for each candidate
-            # For now, use placeholder IoU (would need ground truth matching)
             candidate_data = []
             for candidate in candidates:
                 features = extract_features(candidate, ctx)
-                # Placeholder IoU - in production, compute against ground truth
-                # Using path length as proxy for 
                 iou = IoU(ctx, candidate)
-                # iou = min(
-                #     1.0, (len(candidate.left_path) + len(candidate.right_path)) / 20.0
-                # )
                 candidate_data.append((features.numpy(), iou))
 
             # Create pairwise combinations
