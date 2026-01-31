@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 from perceptions.lane_detection.data_loader import generate_all_perceptual_field_data
 from perceptions.lane_detection.dataset import LaneDetectionDataset
@@ -38,6 +39,13 @@ def train_model(
     epochs_no_improve = 0
     patience = 50  # Reduced patience for small dataset
     min_delta = 0.001  # Minimum change to qualify as improvement
+
+    # Track metrics for plotting
+    train_losses = []
+    train_accuracies = []
+    val_losses = []
+    val_accuracies = []
+    epoch_numbers = []
 
     print(f"Starting training with early stopping patience: {patience} epochs")
     print(f"Minimum improvement threshold: {min_delta}")
@@ -123,6 +131,13 @@ def train_model(
             f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}%, LR: {optimizer.param_groups[0]['lr']:.6f}"
         )
 
+        # Track metrics for plotting
+        train_losses.append(epoch_loss)
+        train_accuracies.append(accuracy)
+        val_losses.append(val_loss)
+        val_accuracies.append(val_accuracy)
+        epoch_numbers.append(epoch + 1)
+
         # Improved early stopping: check both loss and accuracy with minimum delta
         improvement = False
 
@@ -166,6 +181,49 @@ def train_model(
                 f"Best validation loss: {best_val_loss:.4f}, Best validation accuracy: {best_val_accuracy:.2f}%"
             )
             break
+
+    # Plot training metrics
+    if epoch_numbers:  # Only plot if we have at least one epoch
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Top-left: Training and Validation Loss
+        axes[0, 0].plot(epoch_numbers, train_losses, label='Training Loss', marker='o', markersize=3)
+        axes[0, 0].plot(epoch_numbers, val_losses, label='Validation Loss', marker='s', markersize=3)
+        axes[0, 0].set_xlabel('Epoch')
+        axes[0, 0].set_ylabel('Loss')
+        axes[0, 0].set_title('Training and Validation Loss')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Top-right: Training and Validation Accuracy
+        axes[0, 1].plot(epoch_numbers, train_accuracies, label='Training Accuracy', marker='o', markersize=3)
+        axes[0, 1].plot(epoch_numbers, val_accuracies, label='Validation Accuracy', marker='s', markersize=3)
+        axes[0, 1].set_xlabel('Epoch')
+        axes[0, 1].set_ylabel('Accuracy (%)')
+        axes[0, 1].set_title('Training and Validation Accuracy')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Bottom-left: Training Loss Only (zoomed)
+        axes[1, 0].plot(epoch_numbers, train_losses, label='Training Loss', marker='o', markersize=3, color='tab:blue')
+        axes[1, 0].set_xlabel('Epoch')
+        axes[1, 0].set_ylabel('Loss')
+        axes[1, 0].set_title('Training Loss (Zoomed)')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Bottom-right: Validation Loss Only (zoomed)
+        axes[1, 1].plot(epoch_numbers, val_losses, label='Validation Loss', marker='s', markersize=3, color='tab:orange')
+        axes[1, 1].set_xlabel('Epoch')
+        axes[1, 1].set_ylabel('Loss')
+        axes[1, 1].set_title('Validation Loss (Zoomed)')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('training_metrics.png', dpi=100)
+        print("Training metrics plot saved to 'training_metrics.png'")
+        plt.close()
 
 
 def evaluate_model(model, dataset):
