@@ -123,7 +123,7 @@ class TestDataLoader(unittest.TestCase):
         right_boundary = [0, 2, 4]
 
         perceptual_f = generate_perceptual_field_data(
-            left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
+            left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5.5
         )
         car_pos, car_heading_rad, subgraph = perceptual_f[0].car_pos, perceptual_f[0].car_heading, perceptual_f[0].adj_list
         self.assertTrue(

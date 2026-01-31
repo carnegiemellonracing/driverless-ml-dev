@@ -139,8 +139,10 @@ class LaneDetectionDataset(Dataset):
     def __init__(
         self,
         data: List[Tuple[np.ndarray, np.ndarray]] = None,
+        perceptual_range: float = 30,
+        dmax: float = 5.5,
         augment: bool = False,
-        perceptual_range: int = 30,
+        false_positive_rate: float = 0.1,
         contexts: List[PerceptualFieldContext] = None,
         cache_path: str = None,
     ):
@@ -160,16 +162,23 @@ class LaneDetectionDataset(Dataset):
             self.data = data
         elif cache_path and os.path.exists(cache_path):
             print(f"Loading cached dataset from {cache_path}...")
-            self.data = torch.load(cache_path)
+            self.data = torch.load(cache_path, weights_only=False)
             print(f"Loaded {len(self.data)} pairs from cache.")
         else:
-            self.data = self._generate_dataset(perceptual_range, contexts)
+            self.data = self._generate_dataset(
+                contexts=contexts, perceptual_range=perceptual_range
+            )
             if cache_path:
                 print(f"Saving dataset to cache {cache_path}...")
                 torch.save(self.data, cache_path)
 
     def _generate_dataset(
-        self, perceptual_range: int, contexts: List[PerceptualFieldContext] = None
+        self,
+        contexts: List[PerceptualFieldContext] = None,
+        perceptual_range: int = 30,
+        dmax: float = 5.5,
+        augment: bool = False,
+        false_positive_rate: float = 0.1,
     ) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
         Generate training data from maps.
@@ -181,7 +190,10 @@ class LaneDetectionDataset(Dataset):
         data = []
         if contexts is None:
             contexts = generate_all_perceptual_field_data(
-                perceptual_range=perceptual_range
+                perceptual_range=perceptual_range,
+                dmax=dmax,
+                augment=augment,
+                false_positive_rate=false_positive_rate,
             )
         print(f"Generating dataset from {len(contexts)} perceptual fields...")
         print(f"Using {os.cpu_count()} CPU cores for generation...")
