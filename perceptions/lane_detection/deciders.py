@@ -7,7 +7,7 @@ from perceptions.lane_detection.models import (
     PerceptualFieldContext,
     Lane,
     Point,
-    MatchingSet
+    MatchingSet,
 )
 from perceptions.lane_detection.geo import get_segment_angle, online_lane_width
 
@@ -149,38 +149,47 @@ def left_right_decider(
     Returns:
         Integer 0,1 depending on whether it is better to add the left or right point
     """
-    if len(left_lane) < 2 or len(right_lane) < 2:
-        return 0  # Left default bias
-
     cone_map = ctx.cone_map
-        
+
+    # Helper to get "previous" point efficiently
+    # If path has < 2 points, project backwards from current point using car heading
+    # This simulates a segment aligned with the car's heading
+    heading_vec = np.array([np.cos(ctx.car_heading), np.sin(ctx.car_heading)])
+
+    def get_prev_point(path_indices, curr_pt):
+        if len(path_indices) >= 2:
+            return cone_map[path_indices[-2]]
+        else:
+            # Virtual previous point: curr_pt - heading_vec
+            return curr_pt - heading_vec
+
     # theta_l^1: angle at the junction in the left lane
     # Segments: left_lane[-2]->left_lane[-1] and left_lane[-1]->left_candidate
-    p1_left_prev = cone_map[left_lane[-2]]
     p1_left_curr = cone_map[left_lane[-1]]
+    p1_left_prev = get_prev_point(left_lane, p1_left_curr)
     p1_left_next = cone_map[left_candidate]
     theta_l_1 = get_segment_angle(p1_left_prev, p1_left_curr, p1_left_next)
 
     # theta_r^1: angle in the cross connection
     # Segments: right_lane[-2]->right_lane[-1] and right_lane[-1]->left_lane[-1]
-    p1_right_prev = cone_map[right_lane[-2]]
     p1_right_curr = cone_map[right_lane[-1]]
+    p1_right_prev = get_prev_point(right_lane, p1_right_curr)
     p1_right_next = cone_map[left_lane[-1]]
     theta_r_1 = get_segment_angle(p1_right_prev, p1_right_curr, p1_right_next)
 
     # Scenario 2: Add right_candidate to right_lane
-    
+
     # theta_l^2: angle in the cross connection
     # Segments: left_lane[-2]->left_lane[-1] and left_lane[-1]->right_lane[-1]
-    p2_left_prev = cone_map[left_lane[-2]]
     p2_left_curr = cone_map[left_lane[-1]]
+    p2_left_prev = get_prev_point(left_lane, p2_left_curr)
     p2_left_next = cone_map[right_lane[-1]]
     theta_l_2 = get_segment_angle(p2_left_prev, p2_left_curr, p2_left_next)
 
     # theta_r^2: angle at the junction in the right lane
     # Segments: right_lane[-2]->right_lane[-1] and right_lane[-1]->right_candidate
-    p2_right_prev = cone_map[right_lane[-2]]
     p2_right_curr = cone_map[right_lane[-1]]
+    p2_right_prev = get_prev_point(right_lane, p2_right_curr)
     p2_right_next = cone_map[right_candidate]
     theta_r_2 = get_segment_angle(p2_right_prev, p2_right_curr, p2_right_next)
 
@@ -195,51 +204,52 @@ def left_right_decider(
         return 1  # Prefer right
 
 
-
-def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: int = 2500):
+def enumerate_path_pairs(
+    ctx: PerceptualFieldContext, P: LaneCandidate, it_max: int = 2500
+):
     """Implements Algorithm 2: Enumerate path pairs which satisfy constraints.
-    
+
     Line-by-line implementation of Algorithm 2 from the paper.
-    
+
     Args:
         ctx: Perceptual field context G (adjacency list ctx.adj_list)
         P: Current path pair (LaneCandidate with left_path, right_path)
         it_max: Maximum iteration limit (default 2500)
-    
+
     Returns:
         Set Φ of valid LaneCandidates satisfying all constraints
     """
     from perceptions.lane_detection.geo import C_seg, C_poly, C_width
-    
+
     # Helper to initialize and manage global state for recursion
     class EPPState:
         def __init__(self):
             self.Phi = []  # Line 1: Φ ← ∅
             self.i = 0  # Line 2: i ← 0 (iteration counter)
-    
+
     state = EPPState()
-    
+
     def _enumerate(P_current: LaneCandidate):
         """Recursive enumeration following Algorithm 2 lines 3-24."""
-        
+
         # Line 4: if i ≥ it_max then
         if state.i >= it_max:
             # Line 5: return Φ
             return
-        
+
         # Line 6: i ← i + 1
         state.i = state.i + 1
-        
+
         # Line 7: c_a ← P[s].back() for s ∈ {0, 1}
         # s=0 is left, s=1 is right
         c_left = P_current.left_path[-1] if P_current.left_path else None
         c_right = P_current.right_path[-1] if P_current.right_path else None
-        
+
         # Line 8: v_a ← V[s][c_a] for s ∈ {0, 1}
         # V[s] is the visited set for side s
-        v_left = P_current.left_visited 
+        v_left = P_current.left_visited
         v_right = P_current.right_visited
-        
+
         # Line 9: % Adjacent unvisited vertices
         # Line 10: u_a ← (G[c_a] \ v_a) for s ∈ {0, 1}
         # G[c_a] is ctx.adj_list[c_a]
@@ -247,36 +257,39 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
             u_left = set(ctx.adj_list.get(c_left, [])) - v_left
         else:
             u_left = set()
-        
+
         if c_right is not None:
             u_right = set(ctx.adj_list.get(c_right, [])) - v_right
         else:
             u_right = set()
-        
+
         # Line 11: if u_0 = ∅ ∨ u_1 = ∅ then
         if not u_left or not u_right:
             # Line 12: return Φ
             return
-        
+
         # Line 13: % Choose next vertices for both sides
         # Line 14: n_a ← NVD(P[s], u_a) for s ∈ {0, 1}
         n_left = next_vertex_decider(ctx, P_current.left_path, ctx.car_heading)
         n_right = next_vertex_decider(ctx, P_current.right_path, ctx.car_heading)
-        
 
         if n_right and n_left:
             # Line 15: if u_0 ≠ ∅ ∧ u_1 ≠ ∅ then
             if u_left and u_right:
                 # Line 16: s ← LRD(P_0, u_0, P_1, u_1)
                 # LRD takes left lane, right lane, left candidate, right candidate
-                s = left_right_decider(ctx, P_current.left_path, P_current.right_path,
-                                    n_left[0] if n_left else None, 
-                                    n_right[0] if n_right else None)
-            elif not u_left: # Line 17
+                s = left_right_decider(
+                    ctx,
+                    P_current.left_path,
+                    P_current.right_path,
+                    n_left[0] if n_left else None,
+                    n_right[0] if n_right else None,
+                )
+            elif not u_left:  # Line 17
                 s = 1
             else:
                 s = 0
-        elif not n_left: 
+        elif not n_left:
             s = 1
         else:
             s = 0
@@ -287,9 +300,10 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
             P_new = LaneCandidate(
                 left_path=P_current.left_path + [next_vertex],
                 right_path=P_current.right_path,
-                left_visited=P_current.left_visited | {next_vertex}, #Line 19: V[s][c_s].add(n_s)
+                left_visited=P_current.left_visited
+                | {next_vertex},  # Line 19: V[s][c_s].add(n_s)
                 right_visited=P_current.right_visited,
-                matchings=P_current.matchings
+                matchings=P_current.matchings,
             )
         else:  # Right side (s == 1)
             next_vertex = n_right[0] if n_right else list(u_right)[0]
@@ -297,37 +311,43 @@ def enumerate_path_pairs(ctx: PerceptualFieldContext, P: LaneCandidate, it_max: 
                 left_path=P_current.left_path,
                 right_path=P_current.right_path + [next_vertex],
                 left_visited=P_current.left_visited,
-                right_visited=P_current.right_visited | {next_vertex}, #Line 19: V[s][c_s].add(n_s)
-                matchings=P_current.matchings
+                right_visited=P_current.right_visited
+                | {next_vertex},  # Line 19: V[s][c_s].add(n_s)
+                matchings=P_current.matchings,
             )
 
         updated_matchings, min_w, max_w = online_lane_width(ctx, P_current)
         P_new.matchings = updated_matchings
 
         # Line 20: if CD(P) then append to Φ
-        if (C_seg(P_new, ctx, side="left") and
-            C_seg(P_new, ctx, side="right") and
-            C_poly(P_new, ctx) and C_width(P_new, ctx)):
+        if (
+            C_seg(P_new, ctx, side="left")
+            and C_seg(P_new, ctx, side="right")
+            and C_poly(P_new, ctx)
+            and C_width(P_new, ctx)
+        ):
             state.Phi.append(P_new)
-        
+
         # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
 
-        violation_in_fixed = True # TODO FIX
-        should_backtrack = backtracking_decider(
-            min_width=min_w,
-            max_width=max_w,
-            violation_in_fixed_set=violation_in_fixed
+        # Check for violations in the fixed set
+        # violation_in_fixed is True if any FIXED width is outside [W_MIN, W_MAX]
+        violation_in_fixed = any(
+            w < W_MIN or w > W_MAX for w in updated_matchings.fixed_widths
         )
-        
+        should_backtrack = backtracking_decider(
+            min_width=min_w, max_width=max_w, violation_in_fixed_set=violation_in_fixed
+        )
+
         if not should_backtrack:
             # Line 23: Γ ← Γ ∪ EPP(G, P, V, i)
             _enumerate(P_new)
-        
+
         # Line 24: P[s].pop()
         # (Implicit in recursion: we return and don't modify P_new further)
-    
+
     # Start enumeration with initial candidate
     _enumerate(P)
-    
+
     # Line 1: function EPP(G, P, V, i): return Φ
     return state.Phi
