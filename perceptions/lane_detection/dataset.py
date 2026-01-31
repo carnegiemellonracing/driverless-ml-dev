@@ -51,7 +51,7 @@ def generate_lane_candidates(
     all_candidates = []
 
     # Try multiple max_range values to get different starting points
-    for max_range in [2.0, 3.0, 4.0, 5.0]:
+    for max_range in [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]:
         l_start, r_start = find_starting_vertices(ctx, max_range=max_range)
 
         if l_start is None or r_start is None:
@@ -131,7 +131,7 @@ class LaneDetectionDataset(Dataset):
 
         for ctx_idx, ctx in enumerate(contexts):
             # Generate candidates for this context
-            candidates = generate_lane_candidates(ctx, max_candidates=50)
+            candidates = generate_lane_candidates(ctx, max_candidates=200)
 
             if len(candidates) < 2:
                 continue
@@ -142,7 +142,7 @@ class LaneDetectionDataset(Dataset):
             for candidate in candidates:
                 features = extract_features(candidate, ctx)
                 # Placeholder IoU - in production, compute against ground truth
-                # Using path length as proxy for 
+                # Using path length as proxy for
                 iou = IoU(ctx, candidate)
                 # iou = min(
                 #     1.0, (len(candidate.left_path) + len(candidate.right_path)) / 20.0
@@ -157,6 +157,11 @@ class LaneDetectionDataset(Dataset):
                 if np.random.random() > 0.5:
                     feat1, feat2 = feat2, feat1
                     iou1, iou2 = iou2, iou1
+
+                # Skip ambiguous pairs where IoU difference is small
+                # This reduces label noise by ignoring "ties"
+                if abs(iou1 - iou2) < 0.05:
+                    continue
 
                 feature_pairs = np.stack([feat1, feat2], axis=0)  # (2, 8)
                 iou_pairs = np.array([iou1, iou2], dtype=np.float32)  # (2,)
