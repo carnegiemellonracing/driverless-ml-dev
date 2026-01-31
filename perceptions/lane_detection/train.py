@@ -265,7 +265,7 @@ def main(mode="train", model_path="model.pth"):
     )
     # Validation dataset gets NO augmentation
     val_dataset = LaneDetectionDataset(
-        contexts=val_contexts, augment=True, perceptual_range=30
+        contexts=val_contexts, augment=False, perceptual_range=30
     )
 
     if mode == "eval":
