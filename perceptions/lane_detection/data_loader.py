@@ -3,7 +3,8 @@ import yaml
 import numpy as np
 import math
 from typing import Dict, List
-from geo import within_range, within_cone 
+from geo import within_range, within_cone
+from models import PerceptualFieldContext 
 """
 Reading from the dataset
 
@@ -135,21 +136,43 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
     return midpt, car_heading_rad
 
 def generate_perceptual_field_data(
-    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5):
+    left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
+) -> List[PerceptualFieldContext]:
     """
-        Take a left and right boundary, the cone map, and some params
-        Returns a list of different perceptual fields, formatted as (car position, car heading, subgraph)
+    Take a left and right boundary, the cone map, and some params.
+    Returns a list of PerceptualFieldContext objects representing different viewpoints.
+
+    Args:
+        left_boundary: List of indices for left boundary cones
+        right_boundary: List of indices for right boundary cones
+        cone_map: Nx2 numpy array of cone positions (shared across all returned contexts)
+        perceptual_range: Range in meters for visibility
+        dmax: Maximum distance for adjacency graph
+
+    Returns:
+        List of PerceptualFieldContext objects (all sharing the same cone_map reference)
     """
-    perceptual_field_data = []
+    contexts = []
     # Build adjacency graph with cone_id mapping
     adjacency_list = build_adjacency_graph(cone_map, dmax)
 
-    # Filter out points outside perceptual range. Generate a perceptual field using every left point
+    # Generate a perceptual field for each left boundary point
     for left_id in left_boundary:
         car_pos, car_heading_rad = get_car_pos(left_id, right_boundary, cone_map)
         subgraph = filter_points_within_range(
             car_pos, car_heading_rad, cone_map, adjacency_list, perceptual_range
         )
-        perceptual_field_data.append((car_pos, car_heading_rad, subgraph))
 
-    return perceptual_field_data
+        # Get the set of visible indices from the subgraph
+        visible_indices = set(subgraph.keys())
+
+        ctx = PerceptualFieldContext(
+            cone_map=cone_map,
+            visible_indices=visible_indices,
+            adj_list=subgraph,
+            car_pos=car_pos,
+            car_heading=car_heading_rad,
+        )
+        contexts.append(ctx)
+
+    return contexts

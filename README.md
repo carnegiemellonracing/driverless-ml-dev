@@ -10,8 +10,11 @@ Machine Learning-related scripts and architecture for Carnegie Mellon Racing
 
 ## Algorithms To be Implemented
 
-- C_width
+- C_width [complete]
 - C_poly [complete]
 - C_seg [complete]
-- bt_decider
+- bt_decider [complete]
 - next_vertex_decider
+- lr_decider
+- enumerate_path_pairs
+- start_vertices [complete]

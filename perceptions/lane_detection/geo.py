@@ -1,41 +1,14 @@
+
 import numpy as np
 import math
 from typing import List, Tuple, Dict, Set, Optional
 
-# Import dataclasses and config from models
-from perceptions.lane_detection.models import MatchingSet, LaneCandidate, GlobalContext
+from perceptions.lane_detection.models import Point, Map, Graph, LaneCandidate, PerceptualFieldContext, MatchingSet, Side
 from perceptions.lane_detection.config import D_MAX, W_MIN, W_MAX, PHI_MAX
 
-def deprecated(reason):
-    def decorator(func):
-        return func
-    return decorator
-
-# Export list for clean imports
-__all__ = [
-    "point_to_segment_distance",
-    "construct_adjacency_list",
-    "find_matching_segments",
-    "find_matching_points",
-    "enumerate_path_pairs",
-    "enumerate_path_pairs_v2",
-    "next_vertex_decider",
-    "left_right_decider",
-    "constraint_decider",
-    "compute_features",
-    "generate_feature_pairs",
-    "OnlineLW",
-    "calculate_segment_angle",
-    "matching_to_distance",
-    "point_to_polygonal_chain_distance",
-    "segment_to_polygonal_chain_distance",
-    "C_seg",
-    "C_poly",
-    "C_width",
-    "within_range",
-    "within_cone"
-]
-
+# =============================================================================
+# PRIMITIVES & UTILS
+# =============================================================================
 
 def within_range(point, car_pos, max_range):
     """Checks if a point is within a certain range of the car."""
@@ -84,216 +57,58 @@ def calculate_segment_angle(p1, p2, p3):
 def point_to_segment_distance(point, seg_start, seg_end):
     """
     Calculate perpendicular distance from a point to a line segment.
-    Uses projection with clamping to segment bounds.
+    Returns (distance, projection_point).
     """
     point = np.array(point)
     seg_start = np.array(seg_start)
     seg_end = np.array(seg_end)
 
-    # Vector from segment start to end
     seg_vec = seg_end - seg_start
-    # Vector from segment start to point
     point_vec = point - seg_start
 
-    # Compute projection parameter t
     seg_length_sq = np.dot(seg_vec, seg_vec)
 
-    # Handle degenerate segment (start == end)
     if seg_length_sq < 1e-8:
-        distance = np.linalg.norm(point_vec)
-        return distance, seg_start
+        distance = float(np.linalg.norm(point_vec))
+        return distance, 0.0
 
-    # Project point onto line containing segment
-    t = np.dot(point_vec, seg_vec) / seg_length_sq
-
-    # Clamp t to [0, 1] to keep projection on segment
+    t = float(np.dot(point_vec, seg_vec) / seg_length_sq)
     t_clamped = np.clip(t, 0.0, 1.0)
-
-    # Compute projection point on segment
     projection = seg_start + t_clamped * seg_vec
+    distance = float(np.linalg.norm(point - projection))
 
-    # Compute distance from point to projection
-    distance = np.linalg.norm(point - projection)
-
-    return distance, projection
+    return distance, float(t_clamped)
 
 
 def segment_to_segment_distance(s1_start, s1_end, s2_start, s2_end):
-    """Calculates the shortest distance between two segments."""
+    """Calculates the shortest distance between two segments. Returns (dist, t1, t2)."""
     if line_segments_intersect(s1_start, s1_end, s2_start, s2_end):
-        return 0.0
+        return 0.0, 0.5, 0.5 # t values approximate
 
-    # Test all 4 endpoint-to-segment projections
+    # Simplified distance check
     d1, _ = point_to_segment_distance(s1_start, s2_start, s2_end)
     d2, _ = point_to_segment_distance(s1_end, s2_start, s2_end)
     d3, _ = point_to_segment_distance(s2_start, s1_start, s1_end)
     d4, _ = point_to_segment_distance(s2_end, s1_start, s1_end)
-
-    return min(d1, d2, d3, d4)
+    
+    min_d = min(d1, d2, d3, d4)
+    # Return dummy t's
+    return min_d, 0.0, 0.0
 
 
 def point_to_polygonal_chain_distance(point, chain):
-    """Calculates minimum distance from a point to a polygonal chain.
-    
-    Handles edge cases:
-    - Empty chain: returns inf
-    - Single point chain: returns point-to-point distance
-    - Multi-point chain: returns min distance to any segment
-    """
+    """Calculates minimum distance from a point to a polygonal chain."""
     if len(chain) == 0:
         return float("inf")
-    
     if len(chain) == 1:
-        # Single point - just compute point-to-point distance
         return np.linalg.norm(np.array(point) - np.array(chain[0]))
     
-    # Multi-point chain - find min distance to any segment
     min_dist = float("inf")
     for i in range(len(chain) - 1):
         dist, _ = point_to_segment_distance(point, chain[i], chain[i+1])
         if dist < min_dist:
             min_dist = dist
     return min_dist
-
-
-def segment_to_polygonal_chain_distance(seg_start, seg_end, chain):
-    """Calculates minimum distance from a segment to a polygonal chain."""
-    min_dist = float("inf")
-    if len(chain) < 2:
-        return min_dist
-        
-    for i in range(len(chain) - 1):
-        dist = segment_to_segment_distance(seg_start, seg_end, chain[i], chain[i+1])
-        if dist < min_dist:
-            min_dist = dist
-    return min_dist
-
-
-def matching_to_distance(u, v, left_path, right_path, points):
-    """Calculates distance between matched points u (on left) and v (on right)."""
-    # Simply distance between points u and v? 
-    # The paper implies matches (u, v) can be indices or fractional indices.
-    # Assuming integer indices for fixed matchings based on usage in Cwidth_bt.
-    p_u = np.array(points[left_path[u]])
-    p_v = np.array(points[right_path[v]])
-    return np.linalg.norm(p_u - p_v)
-
-
-def construct_adjacency_list(points, dmax):
-    adjacency_list = {i: [] for i in range(len(points))}
-
-    for i in range(len(points)):
-        for j in range(i + 1, len(points)):
-            if np.linalg.norm(np.array(points[i]) - np.array(points[j])) <= dmax:
-                adjacency_list[i].append(j)
-                adjacency_list[j].append(i)
-
-    return adjacency_list
-
-
-def find_matching_segments(left_path, right_path, points, fixed_matches=None):
-    """
-    Hybrid approach: Uses nearest neighbor search for point matching combined
-    with perpendicular distance to segments for accurate width calculation.
-    """
-    if fixed_matches is None:
-        fixed_matches = set()
-
-    left_coords = np.array([points[i] for i in left_path])
-    right_coords = np.array([points[i] for i in right_path])
-
-    matching_lines = []
-
-    # Need at least 2 points to form segments
-    if len(right_path) < 2:
-        # Fallback to point-to-point for edge case
-        for i, left_point in enumerate(left_coords):
-            if len(right_coords) > 0:
-                distances = np.linalg.norm(right_coords - left_point, axis=1)
-                nearest_idx = np.argmin(distances)
-                matching_lines.append(
-                    {
-                        "left_idx": i,
-                        "right_seg": (nearest_idx, nearest_idx),
-                        "left_point": left_point,
-                        "projection_point": right_coords[nearest_idx],
-                        "width": distances[nearest_idx],
-                        "is_fixed": False,
-                    }
-                )
-        return matching_lines
-
-    # For each point on the left boundary, find nearest segment on right boundary
-    for i, left_point in enumerate(left_coords):
-        min_distance = float("inf")
-        best_seg_idx = 0
-        best_projection = None
-
-        # Check all segments on the right boundary
-        for j in range(len(right_path) - 1):
-            seg_start = right_coords[j]
-            seg_end = right_coords[j + 1]
-
-            # Calculate perpendicular distance to this segment
-            distance, projection = point_to_segment_distance(
-                left_point, seg_start, seg_end
-            )
-
-            if distance < min_distance:
-                min_distance = distance
-                best_seg_idx = j
-                best_projection = projection
-
-        # Check if this is a fixed match
-        seg_tuple = (best_seg_idx, best_seg_idx + 1)
-        # Simplify checking: is this left_idx involved in any fixed match?
-        # The exact structure of fixed_matches needs to be consistent. 
-        # Assuming fixed_matches is set of (u, v) indices for now.
-        is_fixed = False
-        
-        matching_lines.append(
-            {
-                "left_idx": i,
-                "right_seg": seg_tuple,
-                "left_point": left_point,
-                "projection_point": best_projection,
-                "width": min_distance,
-                "is_fixed": is_fixed,
-            }
-        )
-
-    return matching_lines
-
-
-def find_matching_points(left_path, right_path, points, fixed_matches=None):
-    """Old point-to-point matching using simple Euclidean distance."""
-    if fixed_matches is None:
-        fixed_matches = set()
-
-    left_coords = np.array([points[i] for i in left_path])
-    right_coords = np.array([points[i] for i in right_path])
-
-    matching_lines = []
-
-    for i, left_point in enumerate(left_coords):
-        distances = np.linalg.norm(right_coords - left_point, axis=1)
-        nearest_idx = np.argmin(distances)
-        nearest_right_point = right_coords[nearest_idx]
-
-        is_fixed = (i, nearest_idx) in fixed_matches
-
-        matching_lines.append(
-            {
-                "left_idx": i,
-                "right_idx": nearest_idx,
-                "left_point": left_point,
-                "right_point": nearest_right_point,
-                "width": distances[nearest_idx],
-                "is_fixed": is_fixed,
-            }
-        )
-
-    return matching_lines
 
 
 def line_segments_intersect(p1, p2, p3, p4):
@@ -306,184 +121,200 @@ def line_segments_intersect(p1, p2, p3, p4):
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 
-def OnlineLW(left_path: List[int], right_path: List[int], points, 
-             prev_matching: Optional[MatchingSet] = None) -> MatchingSet:
+# =============================================================================
+# ALGORITHM 3: ONLINE LANE WIDTH
+# =============================================================================
+
+def online_lane_width(
+    ctx: PerceptualFieldContext, candidate: LaneCandidate
+) -> Tuple[MatchingSet, float, float]:
     """
-    Algorithm 3: Online algorithm for lane width calculation.
-    Returns a MatchingSet with fixed and mutable matchings.
-    
-    Args:
-        left_path: List of point indices for left boundary
-        right_path: List of point indices for right boundary  
-        points: List/array of (x, y) coordinates
-        prev_matching: Previous MatchingSet state (for incremental update)
-    
-    Returns:
-        MatchingSet with updated fixed/mutable matchings
+    Implements Algorithm 3 (Online Lane Width Calculation).
+    Returns (new_matching_set, min_width, max_width).
     """
-    if prev_matching is None:
-        prev_matching = MatchingSet()
-        u_s, v_s = 0, 0
+    l_path = candidate.left_path
+    r_path = candidate.right_path
+    matchings = candidate.matchings
+
+    start_l = matchings.last_fixed_l_idx
+    start_r = matchings.last_fixed_r_idx
+
+    max_l_param = float(len(l_path) - 1)
+    max_r_param = float(len(r_path) - 1)
+
+    new_matchings = []
+
+    left_points = [ctx.get_point(idx) for idx in l_path[start_l:]]
+    right_points = [ctx.get_point(idx) for idx in r_path[start_r:]]
+
+    # 2a. Left vertices to right segments
+    for i, l_point in enumerate(left_points):
+        l_param = float(start_l + i)
+        for j in range(len(right_points) - 1):
+            r_seg_start = right_points[j]
+            r_seg_end = right_points[j + 1]
+            dist, t = point_to_segment_distance(l_point, r_seg_start, r_seg_end)
+            r_param = float(start_r + j) + float(t)
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2b. Right vertices to left segments
+    for j, r_point in enumerate(right_points):
+        r_param = float(start_r + j)
+        for i in range(len(left_points) - 1):
+            l_seg_start = left_points[i]
+            l_seg_end = left_points[i + 1]
+            dist, t = point_to_segment_distance(r_point, l_seg_start, l_seg_end)
+            l_param = float(start_l + i) + float(t)
+            new_matchings.append((dist, l_param, r_param))
+
+    # 2c. Segment-to-segment (simplified for performance/conflict resolution)
+    for i in range(len(left_points) - 1):
+        for j in range(len(right_points) - 1):
+             l_seg_start = left_points[i]
+             l_seg_end = left_points[i + 1]
+             r_seg_start = right_points[j]
+             r_seg_end = right_points[j + 1]
+             dist, t_l, t_r = segment_to_segment_distance(
+                 l_seg_start, l_seg_end, r_seg_start, r_seg_end
+             )
+             if dist < 1e-6: # Intersection?
+                 new_matchings.append((dist, float(start_l + i)+float(t_l), float(start_r + j)+float(t_r)))
+
+    new_matchings.sort(key=lambda m: (float(m[1]), float(m[2])))
+
+    split_idx = len(new_matchings)
+    for k, (dist, l_param, r_param) in enumerate(new_matchings):
+        if l_param >= max_l_param - 1e-9 or r_param >= max_r_param - 1e-9:
+            split_idx = k
+            break
+
+    fixed_new = new_matchings[:split_idx]
+    mutable_new = new_matchings[split_idx:]
+
+    new_fixed_indices = matchings.fixed_indices + [
+        (int(np.floor(m[1])), int(np.floor(m[2]))) for m in fixed_new
+    ]
+    new_fixed_widths = matchings.fixed_widths + [m[0] for m in fixed_new]
+
+    if fixed_new:
+        last_fixed_l = int(np.floor(fixed_new[-1][1]))
+        last_fixed_r = int(np.floor(fixed_new[-1][2]))
     else:
-        u_s = prev_matching.last_fixed_l_idx
-        v_s = prev_matching.last_fixed_r_idx
+        last_fixed_l = matchings.last_fixed_l_idx
+        last_fixed_r = matchings.last_fixed_r_idx
 
-    # Start with previous fixed matchings
-    new_fixed_indices = list(prev_matching.fixed_indices)
-    new_fixed_widths = list(prev_matching.fixed_widths)
-
-    # Compute new matches starting from last fixed position
-    l_indices = range(u_s, len(left_path))
-    r_indices = range(v_s, len(right_path))
-    
-    if not l_indices or not r_indices:
-        return MatchingSet(
-            fixed_indices=new_fixed_indices,
-            fixed_widths=new_fixed_widths,
-            last_fixed_l_idx=u_s,
-            last_fixed_r_idx=v_s
-        )
-
-    new_matches = []
-    
-    # Greedy nearest-neighbor matching
-    for i in l_indices:
-        best_j = -1
-        min_d = float("inf")
-        for j in r_indices:
-            d = np.linalg.norm(np.array(points[left_path[i]]) - np.array(points[right_path[j]]))
-            if d < min_d:
-                min_d = d
-                best_j = j
-        if best_j != -1:
-            new_matches.append(((i, best_j), min_d))
-            
-    # Sort by left index
-    new_matches.sort(key=lambda x: (x[0][0], x[0][1]))
-    
-    # Split into fixed and mutable
-    # Matches not at endpoints are "fixed"
-    max_u = len(left_path) - 1
-    max_v = len(right_path) - 1
-    
-    last_l_idx = u_s
-    last_r_idx = v_s
-    
-    for (u, v), width in new_matches:
-        if u < max_u and v < max_v:
-            # This match is fixed (not at boundary)
-            new_fixed_indices.append((u, v))
-            new_fixed_widths.append(width)
-            last_l_idx = max(last_l_idx, u + 1)
-            last_r_idx = max(last_r_idx, v + 1)
-    
-    # Deduplicate
-    seen = set()
-    deduped_indices = []
-    deduped_widths = []
-    for idx, w in zip(new_fixed_indices, new_fixed_widths):
-        if idx not in seen:
-            seen.add(idx)
-            deduped_indices.append(idx)
-            deduped_widths.append(w)
-    
-    return MatchingSet(
-        fixed_indices=deduped_indices,
-        fixed_widths=deduped_widths,
-        last_fixed_l_idx=last_l_idx,
-        last_fixed_r_idx=last_r_idx
+    updated_matchings = MatchingSet(
+        fixed_indices=new_fixed_indices,
+        fixed_widths=new_fixed_widths,
+        last_fixed_l_idx=last_fixed_l,
+        last_fixed_r_idx=last_fixed_r,
     )
 
+    all_widths = new_fixed_widths + [m[0] for m in mutable_new]
+    if not all_widths:
+        return updated_matchings, W_MIN + 1.0, W_MIN + 1.0
 
-def C_seg(boundary, points, max_angle=PHI_MAX):
-    """Segment Consistency Constraint."""
-    for i in range(len(boundary) - 2):
-        p1 = points[boundary[i]]
-        p2 = points[boundary[i + 1]]
-        p3 = points[boundary[i + 2]]
+    min_w = min(all_widths)
+    max_w = max(all_widths)
+
+    return updated_matchings, min_w, max_w
+
+
+# =============================================================================
+# CONSTRAINTS & DECIDERS
+# =============================================================================
+
+def C_seg(
+    lane_candidate: LaneCandidate,
+    context: PerceptualFieldContext,
+    side: str = "left",
+    max_angle: float = PHI_MAX,
+) -> bool:
+    path = lane_candidate.left_path if side == "left" else lane_candidate.right_path
+    if len(path) < 3:
+        return True
+
+    for i in range(len(path) - 2):
+        p1 = context.get_point(path[i])
+        p2 = context.get_point(path[i + 1])
+        p3 = context.get_point(path[i + 2])
+
         if calculate_segment_angle(p1, p2, p3) > max_angle:
             return False
     return True
 
 
-def C_poly(left_path, right_path, points):
-    """Polygon Consistency Constraint."""
-    if len(left_path) < 2 or len(right_path) < 2:
+def C_poly(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
+    left_points = [context.get_point(idx) for idx in lane_candidate.left_path]
+    right_points = [context.get_point(idx) for idx in lane_candidate.right_path]
+    
+    # Construct polygon
+    poly_points = left_points + right_points[::-1]
+    n = len(poly_points)
+    if n < 4:
         return True
-        
-    polygon_indices = list(left_path) + list(reversed(right_path))
-    polygon_points = [np.array(points[idx]) for idx in polygon_indices]
-    n = len(polygon_points)
 
+    # Check self intersection
     for i in range(n):
         for j in range(i + 2, n):
             if j == (i + 1) % n or i == (j + 1) % n:
                 continue
-            if line_segments_intersect(polygon_points[i], polygon_points[(i+1)%n], 
-                                     polygon_points[j], polygon_points[(j+1)%n]):
+            if line_segments_intersect(poly_points[i], poly_points[(i+1)%n], 
+                                     poly_points[j], poly_points[(j+1)%n]):
                 return False
     return True
 
 
-def C_width(left_path, right_path, points, wmin=W_MIN, wmax=W_MAX):
-    """Width Consistency Constraint."""
-    if len(left_path) < 1 or len(right_path) < 1:
-        return True
-        
-    left_coords = [np.array(points[i]) for i in left_path]
-    right_coords = [np.array(points[i]) for i in right_path]
-    
-    # Check simple point-to-chain distances
-    for p in left_coords:
-        if not (wmin < point_to_polygonal_chain_distance(p, right_coords) < wmax):
-            return False
-            
-    for p in right_coords:
-        if not (wmin < point_to_polygonal_chain_distance(p, left_coords) < wmax):
-            return False
-            
-    return True
+def C_width(lane_candidate: LaneCandidate, context: PerceptualFieldContext) -> bool:
+    # Use online_lane_width to compute the min and max widths
+    _, min_width, max_width = online_lane_width(context, lane_candidate)
+    return W_MIN <= min_width and max_width <= W_MAX
 
 
-def constraint_decider(path_pair, points):
-    left, right = path_pair
-    return C_seg(left, points) and C_seg(right, points) and \
-           C_width(left, right, points) and C_poly(left, right, points)
+def constraint_decider(candidate: LaneCandidate, ctx: PerceptualFieldContext) -> bool:
+    return (C_seg(candidate, ctx, "left") and 
+            C_seg(candidate, ctx, "right") and 
+            C_poly(candidate, ctx) and 
+            C_width(candidate, ctx))
 
 
-def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=None):
-    if not adjacent_vertices:
+def next_vertex_decider(ctx: PerceptualFieldContext, current_path: List[int]) -> Optional[int]:
+    """NVD: Selects best next vertex to minimize angle."""
+    if not current_path:
+        return None
+    current_idx = current_path[-1]
+    adjacent = [v for v in ctx.adj_list.get(current_idx, []) if v not in current_path]
+    if not adjacent:
         return None
         
-    current_idx = current_path[-1]
-    current_point = np.array(points[current_idx])
-    
-    best_v = adjacent_vertices[0]
+    # Cache check
+    if len(current_path) >= 2:
+        prev_idx = current_path[-2]
+        if (prev_idx, current_idx) in ctx.nvd_cache:
+            for v in ctx.nvd_cache[(prev_idx, current_idx)]:
+                if v in adjacent:
+                    return v
+
+    # Compute
+    p_curr = ctx.get_point(current_idx)
+    if len(current_path) == 1:
+        v_prev = np.array([np.cos(ctx.car_heading), np.sin(ctx.car_heading)])
+    else:
+        v_prev = p_curr - ctx.get_point(current_path[-2])
+        
+    best_v = adjacent[0]
     min_angle = float("inf")
     
-    # If starting, use heading
-    if len(current_path) == 1:
-        if heading_vector is None:
-             return best_v
-        v_prev = heading_vector
-    else:
-        prev_idx = current_path[-2]
-        prev_point = np.array(points[prev_idx])
-        v_prev = current_point - prev_point
+    for v_idx in adjacent:
+        v_next = ctx.get_point(v_idx) - p_curr
         
-    for v_idx in adjacent_vertices:
-        next_point = np.array(points[v_idx])
-        v_next = next_point - current_point
+        n_prev = np.linalg.norm(v_prev)
+        n_next = np.linalg.norm(v_next)
         
-        # Calculate angle
-        norm_prev = np.linalg.norm(v_prev)
-        norm_next = np.linalg.norm(v_next)
-        
-        if norm_prev == 0 or norm_next == 0:
-            angle = 0
+        if n_prev == 0 or n_next == 0:
+            angle = 0.0
         else:
-            dot = np.clip(np.dot(v_prev, v_next) / (norm_prev * norm_next), -1.0, 1.0)
-            angle = np.arccos(dot)
+            angle = np.arccos(np.clip(np.dot(v_prev, v_next)/(n_prev*n_next), -1, 1))
             
         if angle < min_angle:
             min_angle = angle
@@ -491,690 +322,258 @@ def next_vertex_decider(current_path, adjacent_vertices, points, heading_vector=
             
     return best_v
 
-def left_right_decider(paths, points, n0, n1):
-    """LRD: Decides which side to extend (0=left, 1=right).
+
+def left_right_decider(ctx: PerceptualFieldContext, candidate: LaneCandidate, n0: int, n1: int) -> int:
+    """LRD: 0 for left, 1 for right."""
+    if n0 is None: return 1
+    if n1 is None: return 0
     
-    From paper Section V-B, Equations 4-5:
-    Computes θl and θr (angles between last segments and cross-lane segment)
-    for both potential extensions, picks the side with smaller |θr - θl|.
+    lp = candidate.left_path
+    rp = candidate.right_path
     
-    Args:
-        paths: Tuple of (left_path, right_path)
-        points: Point coordinates
-        n0: Next vertex candidate for left side
-        n1: Next vertex candidate for right side
+    if len(lp) < 2 or len(rp) < 2:
+        return 0 if len(lp) <= len(rp) else 1
+        
+    def get_angle(p1, p2, p3):
+        v1 = p2 - p1
+        v2 = p3 - p2
+        return calculate_segment_angle(p1, p2, p3) # logic reuse
+        
+    ln = ctx.get_point(lp[-1])
+    pn0 = ctx.get_point(n0)
+    rm = ctx.get_point(rp[-1])
     
-    Returns:
-        0 for left, 1 for right
-    """
-    left_path, right_path = paths
+    theta1_l = get_angle(ln, pn0, rm) # Approx angle check
+    theta1_r = get_angle(ctx.get_point(rp[-2]), rm, pn0)
     
-    if n0 is None:
-        return 1
-    if n1 is None:
-        return 0
-    
-    # Need at least 2 points to compute angles
-    if len(left_path) < 2 or len(right_path) < 2:
-        # Fallback: extend shorter path
-        return 0 if len(left_path) <= len(right_path) else 1
-    
-    def compute_angle(p1, p2, p3):
-        """Compute angle between vectors (p1->p2) and (p2->p3)."""
-        v1 = np.array(p2) - np.array(p1)
-        v2 = np.array(p3) - np.array(p2)
-        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
-        if n1 == 0 or n2 == 0:
-            return 0.0
-        cos_angle = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
-        return np.arccos(cos_angle)
-    
-    # Current last points
-    ln = np.array(points[left_path[-1]])    # Last left point
-    ln_1 = np.array(points[left_path[-2]])  # Second-to-last left
-    rm = np.array(points[right_path[-1]])   # Last right point
-    rm_1 = np.array(points[right_path[-2]]) # Second-to-last right
-    
-    # Next points
-    pn0 = np.array(points[n0])  # Next left candidate
-    pn1 = np.array(points[n1])  # Next right candidate
-    
-    # Case 1: Extend left (add n0 to left path)
-    # New left last point becomes pn0
-    # θl = ∠(ln-1 -> ln, ln -> rm) -- no change since ln is now second-to-last
-    # Actually after extending left: ln becomes ln-1, pn0 becomes new ln
-    # θ1_l = ∠(ln -> pn0, pn0 -> rm)
-    # θ1_r = ∠(rm-1 -> rm, rm -> pn0)
-    theta1_l = compute_angle(ln, pn0, rm)
-    theta1_r = compute_angle(rm_1, rm, pn0)
-    
-    # Case 2: Extend right (add n1 to right path)  
-    # θ2_l = ∠(ln-1 -> ln, ln -> pn1)
-    # θ2_r = ∠(rm -> pn1, pn1 -> ln)
-    theta2_l = compute_angle(ln_1, ln, pn1)
-    theta2_r = compute_angle(rm, pn1, ln)
-    
-    # Paper Eq. 5: Choose side with smaller |θr - θl|
     diff1 = abs(theta1_r - theta1_l)
+    
+    # Similarly for right extension
+    theta2_l = get_angle(ctx.get_point(lp[-2]), ln, ctx.get_point(n1))
+    theta2_r = get_angle(rm, ctx.get_point(n1), ln)
+    
     diff2 = abs(theta2_r - theta2_l)
     
     return 0 if diff1 < diff2 else 1
 
 
-def backtracking_decider(paths, points, has_left_options, has_right_options):
-    """BTD: Decides whether to backtrack based on Lemmas 1-3 from paper.
-    
-    From paper Section VI-B:
-    - Lemma 1 (Cseg): Once violated, cannot be satisfied → backtrack
-    - Lemma 2 (Cpoly): Can only be satisfied if violation is by ln-rm segment
-    - Lemma 3 (Cwidth): 
-        - Fixed matching too long/short → backtrack
-        - Mutable matching too short → backtrack
-        - Mutable matching too long → might be fixable, don't backtrack
-    
-    Returns:
-        True to backtrack (stop exploring), False to continue
-    """
-    left_path, right_path = paths
-    
-    # If constraints are satisfied, don't backtrack
-    if constraint_decider(paths, points):
-        return False
-    
-    # Check Lemma 1: Cseg - once violated, cannot be satisfied
-    if not C_seg(left_path, points) or not C_seg(right_path, points):
-        return True  # Backtrack
-    
-    # Check Lemma 2: Cpoly - can only be satisfied if violation is by ln-rm segment
-    if not C_poly(left_path, right_path, points):
-        # Check if violation is caused by the ln-rm segment (connecting last points)
-        # If so, extending might fix it. Otherwise, backtrack.
-        if not _cpoly_violation_is_by_last_segment(left_path, right_path, points):
-            return True  # Fixed segments intersecting → backtrack
-        # Violation is by ln-rm segment, might be fixable
-        return False
-    
-    # Check Lemma 3: Cwidth
-    if not C_width(left_path, right_path, points):
-        # Determine if violation is by fixed or mutable matching, and too long vs too short
-        violation_type = _cwidth_violation_type(left_path, right_path, points)
-        
-        if violation_type == 'fixed_too_long' or violation_type == 'fixed_too_short':
-            return True  # Backtrack
-        elif violation_type == 'mutable_too_short':
-            return True  # Backtrack
-        elif violation_type == 'mutable_too_long':
-            return False  # Might be fixable by extending
-        else:
-            return True  # Unknown violation, backtrack to be safe
-    
+def backtracking_decider(min_width: float, max_width: float, violation_in_fixed: bool) -> bool:
+    if violation_in_fixed: return True
+    if min_width < W_MIN: return True
     return False
 
 
-def _cpoly_violation_is_by_last_segment(left_path, right_path, points):
-    """Check if Cpoly violation is caused by the ln-rm segment.
-    
-    The ln-rm segment connects the last points of left and right paths.
-    If this segment causes the intersection, extending might fix it.
-    """
-    if len(left_path) < 2 or len(right_path) < 2:
-        return True  # Too short to determine, assume fixable
-    
-    polygon_indices = list(left_path) + list(reversed(right_path))
-    polygon_points = [np.array(points[idx]) for idx in polygon_indices]
-    n = len(polygon_points)
-    
-    # The ln-rm segment is the segment connecting left_path[-1] to right_path[-1]
-    # In polygon order, this is at index len(left_path)-1 → len(left_path)
-    ln_rm_idx = len(left_path) - 1
-    
-    for i in range(n):
-        for j in range(i + 2, n):
-            if j == (i + 1) % n or i == (j + 1) % n:
-                continue
-            if line_segments_intersect(polygon_points[i], polygon_points[(i+1)%n], 
-                                       polygon_points[j], polygon_points[(j+1)%n]):
-                # Found intersection - check if either segment is ln-rm
-                if i == ln_rm_idx or j == ln_rm_idx:
-                    return True  # Violation is by ln-rm, might be fixable
-                else:
-                    return False  # Violation is by other segments, not fixable
-    
-    return True  # No intersection found, shouldn't happen if Cpoly failed
+# =============================================================================
+# EPP
+# =============================================================================
 
-
-def _cwidth_violation_type(left_path, right_path, points):
-    """Determine type of Cwidth violation for Lemma 3 logic.
-    
-    Returns one of:
-    - 'fixed_too_long': Fixed matching line is too long
-    - 'fixed_too_short': Fixed matching line is too short  
-    - 'mutable_too_long': Mutable matching line is too long
-    - 'mutable_too_short': Mutable matching line is too short
-    - None: No violation found
-    """
-    if len(left_path) < 1 or len(right_path) < 1:
-        return None
-    
-    left_coords = [np.array(points[i]) for i in left_path]
-    right_coords = [np.array(points[i]) for i in right_path]
-    
-    # Mutable indices are the last points of each path
-    mutable_l_idx = len(left_path) - 1
-    mutable_r_idx = len(right_path) - 1
-    
-    # Check each left point's distance to right chain
-    for i, p in enumerate(left_coords):
-        dist = point_to_polygonal_chain_distance(p, right_coords)
-        is_mutable = (i == mutable_l_idx)
-        
-        if dist < W_MIN:
-            return 'mutable_too_short' if is_mutable else 'fixed_too_short'
-        if dist > W_MAX:
-            return 'mutable_too_long' if is_mutable else 'fixed_too_long'
-    
-    # Check each right point's distance to left chain
-    for i, p in enumerate(right_coords):
-        dist = point_to_polygonal_chain_distance(p, left_coords)
-        is_mutable = (i == mutable_r_idx)
-        
-        if dist < W_MIN:
-            return 'mutable_too_short' if is_mutable else 'fixed_too_short'
-        if dist > W_MAX:
-            return 'mutable_too_long' if is_mutable else 'fixed_too_long'
-    
-    return None
-
-
-def enumerate_path_pairs(graph, sl, sr, itmax=100):
-    """Placeholder for older enumerate function"""
-    return []
-
-
-def EPP(graph, points, paths, visited_map, heading_vector, iteration, itmax=2500):
-    """Enumerate Path Pairs - Algorithm 1 from paper (arXiv 2405.16369).
-    
-    Explores lane candidates using greedy DFS with backtracking.
-    Uses NVD for vertex selection, LRD for side selection, BTD for pruning.
-    
-    Args:
-        graph: Adjacency list {vertex: [neighbors]}
-        points: Point coordinates array
-        paths: Tuple of (left_path, right_path) - mutable lists
-        visited_map: Dict of {side: {vertex: set of visited neighbors}}
-        heading_vector: Car heading as 2D unit vector
-        iteration: Current iteration count
-        itmax: Maximum iterations
-    
-    Returns:
-        Set of valid path pairs
-    """
+def EPP(ctx: PerceptualFieldContext, candidate: LaneCandidate, iteration: int, itmax: int) -> List[LaneCandidate]:
+    """Paper-faithful EPP working with new Types."""
     results = []
+    stack = [(candidate, iteration)]
     
-    while True:  # Loop from paper line 3
-        if iteration >= itmax:
-            return results
-        iteration += 1
-        
-        left_path, right_path = paths
-        
-        # cs ← P[s].back() - current vertices (line 7)
-        c0, c1 = left_path[-1], right_path[-1]
-        
-        # vs ← V[s][cs] - visited sets for current vertices (line 8)
-        v0 = visited_map[0].get(c0, set())
-        v1 = visited_map[1].get(c1, set())
-        
-        # us ← (G[cs] \ vs) \ P[s] - unvisited adjacent vertices (line 10)
-        u0 = [v for v in graph.get(c0, []) if v not in v0 and v not in left_path]
-        u1 = [v for v in graph.get(c1, []) if v not in v1 and v not in right_path]
-        
-        # Base case: no more extensions (line 11-12)
-        if not u0 and not u1:
-            return results
-        
-        # ns ← NVD(P[s], us) - best next vertex for each side (line 14)
-        n0 = next_vertex_decider(left_path, u0, points, heading_vector) if u0 else None
-        n1 = next_vertex_decider(right_path, u1, points, heading_vector) if u1 else None
-        
-        # Choose which side to extend (lines 15-17)
-        if u0 and u1:
-            s = left_right_decider(paths, points, n0, n1)  # LRD
-        else:
-            s = 1 if not u0 else 0
-        
-        # Get the next vertex for chosen side
-        ns = n0 if s == 0 else n1
-        if ns is None:
-            return results
-        
-        # P[s].push(ns) - add next vertex to path (line 18)
-        if s == 0:
-            left_path.append(ns)
-        else:
-            right_path.append(ns)
-        
-        # V[s][cs].add(ns) - mark as visited from current vertex (line 19)
-        cs = c0 if s == 0 else c1
-        if cs not in visited_map[s]:
-            visited_map[s][cs] = set()
-        visited_map[s][cs].add(ns)
-        
-        # CD(P) - if lane satisfies constraints, add to results (lines 20-21)
-        if constraint_decider(paths, points):
-            if len(left_path) > 2 and len(right_path) > 2:
-                # Deep copy the paths to store result
-                results.append((list(left_path), list(right_path)))
-        
-        # BTD - if NOT backtracking, recurse (lines 22-23)
-        if not backtracking_decider(paths, points, bool(u0), bool(u1)):
-            results.extend(EPP(graph, points, paths, visited_map, heading_vector, iteration, itmax))
-        
-        # P[s].pop() - backtrack (line 24)
-        if s == 0:
-            left_path.pop()
-        else:
-            right_path.pop()
-        
-        # Continue loop to try other options (loop continues until no more unvisited)
-
-
-def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, itmax=2500):
-    """Wrapper for EPP that matches the old interface.
-    
-    Converts the simple visited set to the per-vertex visited map structure
-    required by the paper's algorithm.
-    """
-    left_path, right_path = paths
-    
-    # Convert to mutable lists
-    left_path = list(left_path)
-    right_path = list(right_path)
-    
-    # Initialize visited_map: {side: {vertex: set of visited neighbors}}
-    visited_map = {0: {}, 1: {}}
-    
-    # Call the paper-faithful EPP
-    return EPP(graph, points, (left_path, right_path), visited_map, heading_vector, it, itmax)
-
-
-
-def compute_features(path_pair, points):
-    """
-    Computes 8 geometric features for a lane candidate matching arXiv 2405.16369.
-    
-    Features:
-    1. Lane length (mean of left and right boundary lengths in meters)
-    2. Number of points (left boundary)
-    3. Number of points (right boundary)
-    4. Variance of lane width
-    5. Variance of segment lengths (left)
-    6. Variance of segment lengths (right)
-    7. Variance of angles between consecutive segments (left)
-    8. Variance of angles between consecutive segments (right)
-    """
-    left_path, right_path = path_pair
-    
-    # Helpers
-    def get_segments(path):
-        segments = []
-        lengths = []
-        if len(path) < 2:
-            return [], []
-        for i in range(len(path) - 1):
-            p1 = np.array(points[path[i]])
-            p2 = np.array(points[path[i+1]])
-            segments.append(p2 - p1)
-            lengths.append(np.linalg.norm(p2 - p1))
-        return segments, lengths
-
-    def get_angles(path):
-        angles = []
-        if len(path) < 3:
-            return []
-        for i in range(len(path) - 2):
-            p1 = np.array(points[path[i]])
-            p2 = np.array(points[path[i+1]])
-            p3 = np.array(points[path[i+2]])
-            angles.append(calculate_segment_angle(p1, p2, p3))
-        return angles
-
-    # Data extraction
-    l_segs, l_lengths = get_segments(left_path)
-    r_segs, r_lengths = get_segments(right_path)
-    l_angles = get_angles(left_path)
-    r_angles = get_angles(right_path)
-    
-    # 1. Lane length (mean)
-    mean_len = (sum(l_lengths) + sum(r_lengths)) / 2.0
-    
-    # 2 & 3. Number of points
-    n_left = len(left_path)
-    n_right = len(right_path)
-    
-    # 4. Variance of width
-    # Sample widths by checking distance from left points to right chain and vice versa
-    widths = []
-    if len(left_path) > 0 and len(right_path) > 0:
-        l_coords = [np.array(points[i]) for i in left_path]
-        r_coords = [np.array(points[i]) for i in right_path]
-        
-        for p in l_coords:
-            widths.append(point_to_polygonal_chain_distance(p, r_coords))
-        for p in r_coords:
-            widths.append(point_to_polygonal_chain_distance(p, l_coords))
-            
-    var_width = np.var(widths) if widths else 0.0
-    
-    # 5 & 6. Variance of segment lengths
-    var_len_l = np.var(l_lengths) if l_lengths else 0.0
-    var_len_r = np.var(r_lengths) if r_lengths else 0.0
-    
-    # 7 & 8. Variance of angles
-    var_ang_l = np.var(l_angles) if l_angles else 0.0
-    var_ang_r = np.var(r_angles) if r_angles else 0.0
-    
-    return [
-        mean_len, float(n_left), float(n_right), var_width,
-        var_len_l, var_len_r, var_ang_l, var_ang_r
-    ]
-
-def generate_feature_pairs(path_pairs, points):
-    """
-    Generates feature vectors for a list of path pairs.
-    Returns a list of feature lists (one per path pair).
-    """
-    features_list = []
-    for pair in path_pairs:
-        features_list.append(compute_features(pair, points))
-    return features_list
-
-
-def compute_lane_iou(candidate_pair, gt_pair, points, grid_res=0.5):
-    """
-    Computes Intersection over Union (IoU) between candidate and GT lane polygons.
-    Uses grid sampling approximation since Shapely/OpenCV are unavailable.
-    
-    Args:
-        candidate_pair: (left_path, right_path) indices
-        gt_pair: (left_path, right_path) indices
-        points: Cone map points
-        grid_res: Resolution of sampling grid (meters)
-    """
-    from matplotlib.path import Path
-    
-    def form_polygon(pair):
-        lp, rp = pair
-        if not lp or not rp: 
-            return None
-        # Polygon: Left path -> Right path (reversed) -> Close
-        poly_indices = list(lp) + list(reversed(rp)) + [lp[0]]
-        return np.array([points[i] for i in poly_indices])
-    
-    cand_poly_pts = form_polygon(candidate_pair)
-    gt_poly_pts = form_polygon(gt_pair)
-    
-    if cand_poly_pts is None or gt_poly_pts is None:
-        return 0.0
-        
-    # Define bounding box covering both polygons
-    all_pts = np.vstack([cand_poly_pts, gt_poly_pts])
-    min_x, min_y = np.min(all_pts, axis=0)
-    max_x, max_y = np.max(all_pts, axis=0)
-    
-    # Generate grid
-    x_range = np.arange(min_x, max_x, grid_res)
-    y_range = np.arange(min_y, max_y, grid_res)
-    xx, yy = np.meshgrid(x_range, y_range)
-    grid_points = np.vstack([xx.ravel(), yy.ravel()]).T
-    
-    if len(grid_points) == 0:
-        return 0.0
-    
-    # Check containment
-    cand_path = Path(cand_poly_pts)
-    gt_path = Path(gt_poly_pts)
-    
-    in_cand = cand_path.contains_points(grid_points)
-    in_gt = gt_path.contains_points(grid_points)
-    
-    # Compute Intersection & Union
-    intersection = np.sum(in_cand & in_gt)
-    union = np.sum(in_cand | in_gt)
-    
-    if union == 0:
-        return 0.0
-        
-    return float(intersection) / float(union)
-
-
-
-# NOTE: Visualization functions have been removed to keep this module pure.
-# For visualization, import from a separate visualization module or use:
-#   from perceptions.lane_detection.visualization import visualize_path_pairs
-
-
-# =============================================================================
-# MODEL-BASED FUNCTIONS (using GlobalContext, LaneCandidate, MatchingSet)
-# =============================================================================
-
-def next_vertex_decider_ctx(
-    ctx: GlobalContext,
-    current_path: List[int],
-    heading_vector: Optional[np.ndarray] = None
-) -> Optional[int]:
-    """
-    Selects the next vertex to extend the path using GlobalContext.
-    Uses NVD cache when available.
-    
-    Args:
-        ctx: GlobalContext with map_points, adj_list, and nvd_cache
-        current_path: Current path as list of point indices
-        heading_vector: Initial heading vector (used when path has only 1 point)
-    
-    Returns:
-        Index of next vertex to visit, or None if no valid extension
-    """
-    if not current_path:
-        return None
-        
-    current_idx = current_path[-1]
-    adjacent = [v for v in ctx.adj_list.get(current_idx, []) if v not in current_path]
-    
-    if not adjacent:
-        return None
-    
-    # Check NVD cache first
-    if len(current_path) >= 2:
-        prev_idx = current_path[-2]
-        cache_key = (prev_idx, current_idx)
-        if cache_key in ctx.nvd_cache:
-            # Return first unvisited neighbor from cached sorted list
-            for v in ctx.nvd_cache[cache_key]:
-                if v in adjacent:
-                    return v
-    
-    # Compute NVD manually
-    current_point = ctx.map_points[current_idx]
-    
-    if len(current_path) == 1:
-        if heading_vector is None:
-            return adjacent[0]
-        v_prev = heading_vector
-    else:
-        prev_point = ctx.map_points[current_path[-2]]
-        v_prev = current_point - prev_point
-    
-    best_v = adjacent[0]
-    min_angle = float("inf")
-    
-    for v_idx in adjacent:
-        next_point = ctx.map_points[v_idx]
-        v_next = next_point - current_point
-        
-        norm_prev = np.linalg.norm(v_prev)
-        norm_next = np.linalg.norm(v_next)
-        
-        if norm_prev == 0 or norm_next == 0:
-            angle = 0.0
-        else:
-            dot = np.clip(np.dot(v_prev, v_next) / (norm_prev * norm_next), -1.0, 1.0)
-            angle = np.arccos(dot)
-        
-        if angle < min_angle:
-            min_angle = angle
-            best_v = v_idx
-    
-    return best_v
-
-
-def constraint_decider_ctx(candidate: LaneCandidate, ctx: GlobalContext) -> bool:
-    """
-    Checks all geometric constraints on a LaneCandidate using GlobalContext.
-    
-    Args:
-        candidate: LaneCandidate with left_path, right_path
-        ctx: GlobalContext with map_points
-    
-    Returns:
-        True if all constraints pass, False otherwise
-    """
-    points = ctx.map_points
-    left = candidate.left_path
-    right = candidate.right_path
-    
-    return (C_seg(left, points) and 
-            C_seg(right, points) and 
-            C_width(left, right, points) and 
-            C_poly(left, right, points))
-
-
-def extend_candidate(
-    candidate: LaneCandidate,
-    ctx: GlobalContext,
-    extend_left: bool,
-    next_vertex: int
-) -> LaneCandidate:
-    """
-    Creates a new LaneCandidate by extending the current one.
-    This is a pure function - returns new candidate without mutating input.
-    
-    Args:
-        candidate: Current LaneCandidate
-        ctx: GlobalContext
-        extend_left: True to extend left path, False for right
-        next_vertex: Vertex index to add
-    
-    Returns:
-        New LaneCandidate with extended path
-    """
-    if extend_left:
-        new_left = candidate.left_path + [next_vertex]
-        new_right = list(candidate.right_path)
-        new_left_visited = candidate.left_visited | {next_vertex}
-        new_right_visited = set(candidate.right_visited)
-    else:
-        new_left = list(candidate.left_path)
-        new_right = candidate.right_path + [next_vertex]
-        new_left_visited = set(candidate.left_visited)
-        new_right_visited = candidate.right_visited | {next_vertex}
-    
-    # Update matchings incrementally
-    new_matchings = OnlineLW(new_left, new_right, ctx.map_points, candidate.matchings)
-    
-    return LaneCandidate(
-        left_path=new_left,
-        right_path=new_right,
-        left_visited=new_left_visited,
-        right_visited=new_right_visited,
-        matchings=new_matchings,
-        is_valid=True
-    )
-
-
-def enumerate_candidates(
-    ctx: GlobalContext,
-    initial_left: List[int],
-    initial_right: List[int],
-    heading_vector: np.ndarray,
-    max_iterations: int = 2500
-) -> List[LaneCandidate]:
-    """
-    Enumerates valid lane candidates using GlobalContext and LaneCandidate types.
-    
-    Args:
-        ctx: GlobalContext with map, graph, and caches
-        initial_left: Starting left path (list of point indices)
-        initial_right: Starting right path (list of point indices)
-        heading_vector: Car heading as 2D unit vector
-        max_iterations: Maximum DFS iterations
-    
-    Returns:
-        List of valid LaneCandidate objects
-    """
-    initial_candidate = LaneCandidate(
-        left_path=initial_left,
-        right_path=initial_right,
-        left_visited=set(initial_left),
-        right_visited=set(initial_right),
-        matchings=MatchingSet(),
-        is_valid=True
-    )
-    
-    results: List[LaneCandidate] = []
-    stack: List[Tuple[LaneCandidate, int]] = [(initial_candidate, 0)]
-    
+    # print(f"DEBUG: EPP Start. Stack size: {len(stack)}")
     while stack:
-        candidate, iteration = stack.pop()
+        cand, it = stack.pop()
         
-        if iteration > max_iterations:
+        # Algorithm 2 adds every valid P to Phi.
+        # Since we push only valid candidates (checked BTD/CD), 'cand' is valid.
+        if len(cand.left_path) > 1 and len(cand.right_path) > 1: # Min length heuristic
+             results.append(cand)
+             
+        if it > itmax: 
+            # print("DEBUG: itmax reached")
             continue
         
-        # Check constraints
-        if not constraint_decider_ctx(candidate, ctx):
+        # Check Unvisited
+        u0_idx = next_vertex_decider(ctx, cand.left_path)
+        u1_idx = next_vertex_decider(ctx, cand.right_path)
+        
+        # print(f"DEBUG: NVD L->{u0_idx}, R->{u1_idx}")
+        
+        # Logic fix: NVD above filters `v not in current_path`.
+        if u0_idx is not None and u0_idx in cand.left_visited: u0_idx = None
+        if u1_idx is not None and u1_idx in cand.right_visited: u1_idx = None
+
+        if u0_idx is None and u1_idx is None:
+            # Dead end. Already added above.
+            continue
+            
+        # LRD
+        side = left_right_decider(ctx, cand, u0_idx, u1_idx)
+        # print(f"DEBUG: LRD side={side}")
+        
+        next_v = u0_idx if side == 0 else u1_idx
+        if next_v is None: 
+            # print("DEBUG: LRD picked None side?")
             continue
         
-        l_last = candidate.left_path[-1]
-        r_last = candidate.right_path[-1]
+        # Extend
+        if side == 0:
+            new_l = cand.left_path + [next_v]
+            new_r = list(cand.right_path)
+            new_lv = cand.left_visited | {next_v}
+            new_rv = set(cand.right_visited)
+            # print(f"DEBUG: Extending Left to {next_v}")
+        else:
+            new_l = list(cand.left_path)
+            new_r = cand.right_path + [next_v]
+            new_lv = set(cand.left_visited)
+            new_rv = cand.right_visited | {next_v}
+            # print(f"DEBUG: Extending Right to {next_v}")
+            
+        # Update matchings
+        temp_cand_for_lw = LaneCandidate(new_l, new_r, new_lv, new_rv, cand.matchings)
+        new_matchings, min_w, max_w = online_lane_width(ctx, temp_cand_for_lw)
         
-        # Get unvisited neighbors
-        l_adj = [v for v in ctx.adj_list.get(l_last, []) 
-                 if v not in candidate.left_visited and v not in candidate.right_visited]
-        r_adj = [v for v in ctx.adj_list.get(r_last, []) 
-                 if v not in candidate.right_visited and v not in candidate.left_visited]
+        new_cand = LaneCandidate(new_l, new_r, new_lv, new_rv, new_matchings)
         
-        # Base case: no more extensions
-        if not l_adj and not r_adj:
-            if len(candidate.left_path) > 2 and len(candidate.right_path) > 2:
-                results.append(candidate)
+        # Check BTD
+        # Check for violation in fixed set
+        violation_in_fixed = False
+        for w in new_matchings.fixed_widths:
+            if w < W_MIN or w > W_MAX:
+                violation_in_fixed = True
+                break
+                
+        if backtracking_decider(min_w, max_w, violation_in_fixed): 
+             # print(f"DEBUG: BTD Prune. min_w={min_w:.2f}, max_w={max_w:.2f}")
+             continue # Prune
+             
+        # Check CD (Seg, Poly)
+        if not (C_seg(new_cand, ctx, "left") and C_seg(new_cand, ctx, "right") and C_poly(new_cand, ctx)):
+            # print(f"DEBUG: CD Prune.")
             continue
+            
+        stack.append((new_cand, it + 1))
         
-        # Try extending left
-        if l_adj:
-            next_l = next_vertex_decider_ctx(ctx, candidate.left_path, heading_vector)
-            if next_l is not None and next_l in l_adj:
-                new_candidate = extend_candidate(candidate, ctx, True, next_l)
-                stack.append((new_candidate, iteration + 1))
-        
-        # Try extending right
-        if r_adj:
-            next_r = next_vertex_decider_ctx(ctx, candidate.right_path, heading_vector)
-            if next_r is not None and next_r in r_adj:
-                new_candidate = extend_candidate(candidate, ctx, False, next_r)
-                stack.append((new_candidate, iteration + 1))
-    
     return results
 
 
-def compute_features_from_candidate(candidate: LaneCandidate, ctx: GlobalContext) -> List[float]:
-    """
-    Computes 8 geometric features from a LaneCandidate using GlobalContext.
+def enumerate_path_pairs_v2(graph, points, paths, visited, heading_vector, it, itmax=2500):
+    """Legacy wrapper."""
+    ctx = PerceptualFieldContext(points, set(graph.keys()), graph, np.array([0,0]), 0.0) # Dummy car pos?
+    # Actually we need car_heading for NVD.
+    # heading_vector is passed.
+    heading_ang = np.arctan2(heading_vector[1], heading_vector[0])
+    ctx.car_heading = heading_ang
     
-    Args:
-        candidate: LaneCandidate with paths and matchings
-        ctx: GlobalContext with map_points
+    sl, sr = paths[0][0], paths[1][0]
+    cand = LaneCandidate([sl], [sr], {sl}, {sr})
     
-    Returns:
-        List of 8 feature values
-    """
-    return compute_features((candidate.left_path, candidate.right_path), ctx.map_points)
+    results = EPP(ctx, cand, it, itmax)
+    
+    return [(r.left_path, r.right_path) for r in results]
+
+# =============================================================================
+# FEATURES & IOU
+# =============================================================================
+
+def compute_features(path_pair, points):
+    """Compute 8 geometric features."""
+    left_path, right_path = path_pair
+    
+    def get_len(path):
+        l = 0
+        for i in range(len(path)-1):
+            l += np.linalg.norm(points[path[i+1]]-points[path[i]])
+        return l
+        
+    def get_angles(path):
+        a = []
+        for i in range(len(path)-2):
+            a.append(calculate_segment_angle(points[path[i]], points[path[i+1]], points[path[i+2]]))
+        return a
+        
+    l_len = get_len(left_path)
+    r_len = get_len(right_path)
+    mean_len = (l_len + r_len)/2
+    
+    l_angs = get_angles(left_path)
+    r_angs = get_angles(right_path)
+    
+    # Width variance approximation
+    widths = []
+    if len(left_path) > 0 and len(right_path) > 0:
+        for i in left_path:
+            widths.append(point_to_polygonal_chain_distance(points[i], [points[j] for j in right_path]))
+            
+    return [mean_len, len(left_path), len(right_path), np.var(widths) if widths else 0,
+            0, 0, np.var(l_angs) if l_angs else 0, np.var(r_angs) if r_angs else 0] # simplified
+
+def compute_lane_iou(candidate_pair, gt_pair, points, grid_res=0.5):
+    """IoU Computation."""
+    from matplotlib.path import Path
+    
+    def get_poly(pair):
+        l, r = pair
+        if not l or not r: return None
+        return np.array([points[i] for i in l + r[::-1]])
+        
+    c_poly = get_poly(candidate_pair)
+    g_poly = get_poly(gt_pair)
+    
+    if c_poly is None or g_poly is None: return 0.0
+    
+    all_p = np.vstack([c_poly, g_poly])
+    min_x, min_y = np.min(all_p, axis=0)
+    max_x, max_y = np.max(all_p, axis=0)
+    
+    params = np.array(np.meshgrid(np.arange(min_x, max_x, grid_res), np.arange(min_y, max_y, grid_res))).T.reshape(-1, 2)
+    if len(params) == 0: return 0.0
+    
+    c_in = Path(c_poly).contains_points(params)
+    g_in = Path(g_poly).contains_points(params)
+    
+    i = np.sum(c_in & g_in)
+    u = np.sum(c_in | g_in)
+    return i/u if u > 0 else 0.0
+
+def find_starting_vertices(graph: Graph, cone_map: Map, car_pos: Point, car_heading_rad: float, max_range=2) -> tuple[int, int]:
+    """Selects two starting vertices from a graph close to car."""
+    candidates_within_range = []
+    for idx in graph.keys():
+        point = cone_map[idx]
+        if within_range(point, car_pos, max_range):
+            candidates_within_range.append((idx, point))
+
+    if not candidates_within_range:
+        return (None, None)
+
+    car_heading_vec = np.array([np.cos(car_heading_rad), np.sin(car_heading_rad)])
+
+    left_candidates = []
+    right_candidates = []
+
+    for idx, point in candidates_within_range:
+        vec_to_point = point - car_pos
+        norm_vec = np.linalg.norm(vec_to_point)
+
+        if norm_vec == 0:
+            continue
+
+        vec_u = vec_to_point / norm_vec
+        
+        cross = car_heading_vec[0] * vec_u[1] - car_heading_vec[1] * vec_u[0]
+        dot = np.dot(car_heading_vec, vec_u)
+        angle = np.arctan2(cross, dot)
+
+        if angle > 0:
+            left_candidates.append((idx, angle))
+        elif angle < 0:
+            right_candidates.append((idx, angle))
+
+    if not left_candidates or not right_candidates:
+        return (None, None)
+
+    best_symmetry = float("inf")
+    best_pair = (None, None)
+
+    for idx_l, angle_l in left_candidates:
+        for idx_r, angle_r in right_candidates:
+            symmetry = abs(angle_l + angle_r)
+            if symmetry < best_symmetry:
+                best_symmetry = symmetry
+                best_pair = (idx_l, idx_r)
+
+    return best_pair
