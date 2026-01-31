@@ -1,6 +1,13 @@
 import numpy as np
 from typing import Tuple, List
-from perceptions.lane_detection.models import Point, Map, Graph, LaneCandidate, PerceptualFieldContext, MatchingSet
+from perceptions.lane_detection.models import (
+    Point,
+    Map,
+    Graph,
+    LaneCandidate,
+    PerceptualFieldContext,
+    MatchingSet,
+)
 from perceptions.lane_detection.config import W_MIN, W_MAX
 
 
@@ -469,25 +476,41 @@ def find_starting_vertices(ctx: PerceptualFieldContext, max_range=2) -> tuple[in
         angle = np.arctan2(cross, dot)
 
         if angle > 0:
-            left_candidates.append((idx, angle))
+            left_candidates.append((idx, dot))
         elif angle < 0:
-            right_candidates.append((idx, angle))
+            right_candidates.append((idx, -dot))
 
     if not left_candidates or not right_candidates:
         return (None, None)
 
     # Step 3: Find the most symmetrical pair
     # Symmetry is measured as how close the absolute angles are (minimize |angle_l + angle_r|)
-    best_symmetry = float("inf")
+    # We also add a distance penalty to favor closer points when symmetry is similar.
+    best_score = float("inf")
     best_pair = (None, None)
 
     for idx_l, angle_l in left_candidates:
+        # Filter exceeding FOV (e.g. > 75 deg)
+        if abs(angle_l) > np.radians(75):
+            continue
+
+        dist_l = np.linalg.norm(ctx.get_point(idx_l) - ctx.car_pos)
+
         for idx_r, angle_r in right_candidates:
+            if abs(angle_r) > np.radians(75):
+                continue
+
+            dist_r = np.linalg.norm(ctx.get_point(idx_r) - ctx.car_pos)
+
             # Symmetry: minimize |angle_l + angle_r|
             # (A symmetrical pair has angle_l ≈ -angle_r)
             symmetry = abs(angle_l + angle_r)
-            if symmetry < best_symmetry:
-                best_symmetry = symmetry
+
+            # Weighted score: Primary is symmetry, secondary is distance
+            score = symmetry + 0.1 * (dist_l + dist_r)
+
+            if score < best_score:
+                best_score = score
                 best_pair = (idx_l, idx_r)
 
     return best_pair

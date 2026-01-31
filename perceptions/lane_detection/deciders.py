@@ -194,8 +194,10 @@ def left_right_decider(
     theta_r_2 = get_segment_angle(p2_right_prev, p2_right_curr, p2_right_next)
 
     # Compare: choose based on which scenario has smaller angular deviation
-    scenario_1_deviation = abs(theta_r_1) + abs(theta_l_1)
-    scenario_2_deviation = abs(theta_r_2) + abs(theta_l_2)
+    # We swap the cross-terms (theta_r_1/theta_l_2) to penalize the leader.
+    # If Left is ahead, L->R (theta_l_2) is large (backward), so we penalize Scenario 1 (Extend Left).
+    scenario_1_deviation = abs(theta_l_2) + abs(theta_l_1)
+    scenario_2_deviation = abs(theta_r_1) + abs(theta_r_2)
 
     # Return 0 for left if scenario 1 is better, 1 for right if scenario 2 is better
     if scenario_1_deviation < scenario_2_deviation:
@@ -264,8 +266,16 @@ def enumerate_path_pairs(
             u_right = set()
 
         # Line 11: if u_0 = ∅ ∨ u_1 = ∅ then
+        # When we can't extend further on one side, check if current candidate is valid
         if not u_left or not u_right:
-            # Line 12: return Φ
+            # Check if current candidate satisfies all constraints
+            if (
+                C_seg(P_current, ctx, side="left")
+                and C_seg(P_current, ctx, side="right")
+                and C_poly(P_current, ctx)
+                and C_width(P_current, ctx)
+            ):
+                state.Phi.append(P_current)
             return
 
         # Line 13: % Choose next vertices for both sides

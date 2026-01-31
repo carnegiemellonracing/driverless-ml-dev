@@ -162,7 +162,7 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False) -> tuple[Point, 
     flip = np.random.choice([-1, 1]) if noise else 1.0
     car_heading_rad = (
         flip
-        * math.atan2(left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1])
+        * math.atan2(closest_right_pt[0] - left_pt[0], left_pt[1] - closest_right_pt[1])
         + angle_noise
     )
     return midpt, car_heading_rad

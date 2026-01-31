@@ -52,26 +52,40 @@ class Classifier:
             print(f"Failed to load model from {model_path}: {e}")
             raise e
 
-    def eval(self, cone_map: Map) -> Optional[LaneCandidate]:
+    def eval(
+        self,
+        cone_map: Map,
+        car_pos: np.ndarray,
+        car_heading: float,
+        perceptual_range: float = 30.0,
+    ) -> Optional[LaneCandidate]:
         """
-        Original entry point: takes a raw cone map, builds context, and runs inference.
+        Entry point: takes a raw cone map and car pose, builds context, and runs inference.
+
+        Args:
+            cone_map: Nx2 numpy array of cone positions
+            car_pos: [x, y] position of the car
+            car_heading: Heading angle in radians
+            perceptual_range: Range in meters for visibility filtering
         """
         print(f"Running inference on {len(cone_map)} cones...")
 
-        # 1. Setup Context
+        # 1. Build adjacency graph
         adj = build_adjacency_graph(cone_map, dmax=self.dmax)
 
-        # Estimate car pos (mean of first few points or 0,0)
-        car_pos = np.array([0.0, 0.0])
-        if len(cone_map) > 0:
-            car_pos = cone_map.mean(axis=0)
+        # 2. Filter to visible cones within perceptual range
+        from perceptions.lane_detection.data_loader import filter_points_within_range
+
+        visible_adj = filter_points_within_range(
+            car_pos, car_heading, cone_map, adj, perceptual_range
+        )
 
         ctx = PerceptualFieldContext(
             cone_map=cone_map,
-            visible_indices=set(range(len(cone_map))),
-            adj_list=adj,
+            visible_indices=set(visible_adj.keys()),
+            adj_list=visible_adj,
             car_pos=car_pos,
-            car_heading=0.0,
+            car_heading=car_heading,
         )
 
         return self.eval_from_context(ctx)
@@ -81,20 +95,20 @@ class Classifier:
         Runs inference on a pre-built PerceptualFieldContext.
         This is useful when we already have the context (e.g. from data_loader).
         """
-        # 2. Find Start
-        l_start, r_start = find_starting_vertices(ctx)
+        # Find starting vertices (max_range=7 to handle variable lane widths)
+        l_start, r_start = find_starting_vertices(ctx, max_range=5)
 
-        # If standard start finding fails, try to use ground truth start if available in context?
-        # For now, let's stick to the heuristic.
         if l_start is None:
-            # print("No starting vertices found.")
             return None
 
-        # print(f"Starting search from L:{l_start}, R:{r_start}")
-
-        # 3. Search
-        candidates = enumerate_path_pairs(ctx, l_start, r_start)
-        # print(f"Generated {len(candidates)} candidates.")
+        # Create initial candidate and enumerate
+        initial_candidate = LaneCandidate(
+            left_path=[l_start],
+            right_path=[r_start],
+            left_visited=set(),
+            right_visited=set(),
+        )
+        candidates = enumerate_path_pairs(ctx, initial_candidate)
 
         if not candidates:
             return None
@@ -114,3 +128,25 @@ class Classifier:
 
         # print(f"Best Lane Score: {best_score:.4f}")
         return best_cand
+
+
+def detect_lane(
+    cones: np.ndarray,
+    car_pos: np.ndarray,
+    car_heading: float,
+    model_path: str = "best_model.pth",
+) -> Optional[LaneCandidate]:
+    """
+    Convenience function for one-shot lane detection.
+
+    Args:
+        cones: Nx2 numpy array of cone [x, y] positions
+        car_pos: [x, y] position of the car
+        car_heading: Heading angle in radians
+        model_path: Path to the trained model checkpoint
+
+    Returns:
+        Best LaneCandidate or None if detection fails
+    """
+    classifier = Classifier(model_path)
+    return classifier.eval(cones, car_pos, car_heading)

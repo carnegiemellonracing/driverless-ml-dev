@@ -211,6 +211,6 @@ __marimo__/
 ml_data/
 
 # Model Checkpoints
-*.pth
+**/model.pth
 training_metrics.png
 evaluation_results/
