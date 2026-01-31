@@ -27,7 +27,8 @@ def train_model(
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     # Add weight decay for L2 regularization
-    optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-3)
+    # Add weight decay for L2 regularization
+    optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     # Add learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer, mode="min", factor=0.3, patience=10
@@ -429,8 +430,9 @@ def main(mode="train", model_path="model.pth"):
                 "model_state_dict": model.state_dict(),
                 "final_config": {
                     "input_size": 8,
-                    "fc1_size": 128,
-                    "fc2_size": 64,
+                    "fc1_size": 256,
+                    "fc2_size": 128,
+                    "fc3_size": 64,
                     "output_size": 1,
                 },
             },

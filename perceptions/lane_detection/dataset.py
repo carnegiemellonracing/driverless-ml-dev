@@ -103,8 +103,14 @@ def process_context(ctx: PerceptualFieldContext) -> List[Tuple[np.ndarray, np.nd
     # Create pairwise combinations
     pair_idx = 0
     for (feat1, iou1), (feat2, iou2) in itertools.combinations(candidate_data, 2):
-        # Skip ambiguous pairs where IoU difference is small FIRST
-        if abs(iou1 - iou2) < 0.05:
+        # Skip ambiguous pairs where IoU difference is small
+        # Increased threshold to ensure meaningful ranking
+        if abs(iou1 - iou2) < 0.1:
+            continue
+
+        # Skip pairs where BOTH candidates are bad
+        # We only want to learn ranking when at least one candidate is decent
+        if max(iou1, iou2) < 0.3:
             continue
 
         # Deterministic ordering: always put higher IoU first
