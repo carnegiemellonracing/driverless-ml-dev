@@ -22,12 +22,12 @@ from perceptions.lane_detection.data_loader import (
 )
 
 
-def augment_feats(feats: torch.Tensor, std_dev: float = 0.1) -> torch.Tensor:
+def augment_feats(feats: torch.Tensor, std_dev: float = 0.01) -> torch.Tensor:
     """Add Gaussian noise to features for augmentation."""
     return feats + torch.randn_like(feats) * std_dev
 
 
-def augment_IoU(IoU: torch.Tensor, std_dev: float = 0.05) -> torch.Tensor:
+def augment_IoU(IoU: torch.Tensor, std_dev: float = 0.02) -> torch.Tensor:
     """Add Gaussian noise to IoU values for augmentation."""
     noisy = IoU + torch.randn_like(IoU) * std_dev
     return torch.clamp(noisy, 0.0, 1.0)  # Keep IoU in valid range
@@ -94,6 +94,7 @@ class LaneDetectionDataset(Dataset):
         data: List[Tuple[np.ndarray, np.ndarray]] = None,
         augment: bool = False,
         perceptual_range: int = 30,
+        contexts: List[PerceptualFieldContext] = None,
     ):
         """
         Initialize the dataset.
@@ -102,27 +103,30 @@ class LaneDetectionDataset(Dataset):
             data: Optional pre-computed data. If None, generates from all maps.
             augment: Whether to apply data augmentation
             perceptual_range: Range for perceptual field generation
+            contexts: Optional list of contexts to use (prevents leakage if split beforehand)
         """
         self.augment = augment
 
         if data is not None:
             self.data = data
         else:
-            self.data = self._generate_dataset(perceptual_range)
+            self.data = self._generate_dataset(perceptual_range, contexts)
 
     def _generate_dataset(
-        self, perceptual_range: int
+        self, perceptual_range: int, contexts: List[PerceptualFieldContext] = None
     ) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
-        Generate training data from all loaded maps.
+        Generate training data from maps.
 
         Returns list of (feature_pairs, iou_pairs) tuples where:
         - feature_pairs: shape (2, 8) - features for two candidates
         - iou_pairs: shape (2,) - IoU scores for the two candidates
         """
         data = []
-        contexts = generate_all_perceptual_field_data(perceptual_range=perceptual_range)
-
+        if contexts is None:
+            contexts = generate_all_perceptual_field_data(
+                perceptual_range=perceptual_range
+            )
         print(f"Generating dataset from {len(contexts)} perceptual fields...")
 
         for ctx_idx, ctx in enumerate(contexts):
@@ -148,6 +152,11 @@ class LaneDetectionDataset(Dataset):
             for (feat1, iou1), (feat2, iou2) in itertools.combinations(
                 candidate_data, 2
             ):
+                # Randomly swap to ensure class balance (p(c1 > c2) ~= 0.5)
+                if np.random.random() > 0.5:
+                    feat1, feat2 = feat2, feat1
+                    iou1, iou2 = iou2, iou1
+
                 feature_pairs = np.stack([feat1, feat2], axis=0)  # (2, 8)
                 iou_pairs = np.array([iou1, iou2], dtype=np.float32)  # (2,)
                 data.append((feature_pairs, iou_pairs))
@@ -171,7 +180,7 @@ class LaneDetectionDataset(Dataset):
 
         if self.augment:
             feats_tensor = augment_feats(feats_tensor)
-            iou_tensor = augment_IoU(iou_tensor)
+            # iou_tensor = augment_IoU(iou_tensor)  # Don't augment targets
 
         return feats_tensor, iou_tensor
 
