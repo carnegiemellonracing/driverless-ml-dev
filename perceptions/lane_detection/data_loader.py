@@ -153,9 +153,63 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False) -> tuple[Point, 
     )
     return midpt, car_heading_rad
 
+def augment_map(
+    cone_map: Map,
+    false_positive_rate: float = 0.1,
+    dilatation: float = 0.2
+) -> Map:
+    """
+    Adds false positive cone points to the cone map for data augmentation.
+    
+    The new points are sampled within a dilated version of the original cone map's bounding box.
+    This simulates the detection of spurious cones around the actual track.
+    
+    Args:
+        cone_map: Nx2 numpy array of cone positions
+        false_positive_rate: Fraction of original cones to add as false points (e.g., 0.1 = 10%)
+        dilatation: Expansion factor for bounding box (e.g., 0.2 = 20% expansion)
+        
+    Returns:
+        Augmented cone map with false positive points appended
+    """
+    if len(cone_map) == 0:
+        return cone_map
+    
+    # Calculate bounding box of original cone map
+    min_point = cone_map.min(axis=0)  # (x_min, y_min)
+    max_point = cone_map.max(axis=0)  # (x_max, y_max)
+    
+    # Calculate dimensions
+    width = max_point[0] - min_point[0]
+    height = max_point[1] - min_point[1]
+    
+    # Expand bounding box by dilatation factor in each direction
+    expanded_min = min_point - np.array([width * dilatation, height * dilatation])
+    expanded_max = max_point + np.array([width * dilatation, height * dilatation])
+    
+    # Calculate number of false points to add
+    num_false_points = max(1, int(len(cone_map) * false_positive_rate))
+    
+    # Sample random points within the expanded region
+    false_points = np.random.uniform(
+        low=expanded_min,
+        high=expanded_max,
+        size=(num_false_points, 2)
+    )
+    
+    # Append false points to cone map
+    augmented_cone_map = np.vstack([cone_map, false_points])
+    
+    return augmented_cone_map
+
 
 def generate_perceptual_field_data(
-    left_boundary: Lane, right_boundary: Lane, cone_map: Map, perceptual_range: float =30.0, dmax: float =5
+    left_boundary: Lane, right_boundary: Lane,
+    cone_map: Map,
+    perceptual_range: float = 30.0,
+    dmax: float = 5.5,
+    augment: bool = False,
+    false_positive_rate: float = 0.1
 ) -> List[PerceptualFieldContext]:
     """
     Take a left and right boundary, the cone map, and some params.
@@ -172,6 +226,10 @@ def generate_perceptual_field_data(
         List of PerceptualFieldContext objects (all sharing the same cone_map reference)
     """
     contexts = []
+
+    if augment:
+        cone_map = augment_map(cone_map, false_positive_rate)
+
     # Build adjacency graph with cone_id mapping
     adjacency_list = build_adjacency_graph(cone_map, dmax)
 
@@ -200,7 +258,10 @@ def generate_perceptual_field_data(
 
 
 def generate_all_perceptual_field_data(
-    perceptual_range: int = 30, dmax: float = 5.0
+    perceptual_range: int = 30,
+    dmax: float = 5.5,
+    augment: bool = False,
+    false_positive_rate: float = 0.1,
 ) -> List[PerceptualFieldContext]:
     """
     Generate perceptual field data for all loaded maps.
@@ -220,7 +281,7 @@ def generate_all_perceptual_field_data(
         left_boundaries, right_boundaries, cone_maps
     ):
         contexts = generate_perceptual_field_data(
-            left_boundary, right_boundary, cone_map, perceptual_range, dmax
+            left_boundary, right_boundary, cone_map, perceptual_range, dmax, augment, false_positive_rate
         )
         all_contexts.extend(contexts)
     return all_contexts

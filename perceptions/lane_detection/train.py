@@ -319,7 +319,7 @@ def main(mode="train", model_path="model.pth"):
     # 3. Create Datasets from split contexts
     # Train dataset gets augmentation
     train_dataset = LaneDetectionDataset(
-        contexts=train_contexts, augment=True, perceptual_range=30
+        contexts=train_contexts, augment=True, false_positive_rate=0.1, perceptual_range=30
     )
     # Validation dataset gets NO augmentation
     val_dataset = LaneDetectionDataset(

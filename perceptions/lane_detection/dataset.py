@@ -92,8 +92,10 @@ class LaneDetectionDataset(Dataset):
     def __init__(
         self,
         data: List[Tuple[np.ndarray, np.ndarray]] = None,
+        perceptual_range: float = 30,
+        dmax: float = 5.5,
         augment: bool = False,
-        perceptual_range: int = 30,
+        false_positive_rate: float = 0.1,
         contexts: List[PerceptualFieldContext] = None,
     ):
         """
@@ -110,10 +112,15 @@ class LaneDetectionDataset(Dataset):
         if data is not None:
             self.data = data
         else:
-            self.data = self._generate_dataset(perceptual_range, contexts)
+            self.data = self._generate_dataset(contexts, perceptual_range, dmax, augment, false_positive_rate)
 
     def _generate_dataset(
-        self, perceptual_range: int, contexts: List[PerceptualFieldContext] = None
+        self,
+        contexts: List[PerceptualFieldContext] = None,
+        perceptual_range: int = 30,
+        dmax: float = 5.5,
+        augment: bool = False,
+        false_positive_rate: float = 0.1,
     ) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
         Generate training data from maps.
@@ -125,7 +132,10 @@ class LaneDetectionDataset(Dataset):
         data = []
         if contexts is None:
             contexts = generate_all_perceptual_field_data(
-                perceptual_range=perceptual_range
+                perceptual_range=perceptual_range,
+                dmax=dmax,
+                augment=augment,
+                false_positive_rate=false_positive_rate
             )
         print(f"Generating dataset from {len(contexts)} perceptual fields...")
 

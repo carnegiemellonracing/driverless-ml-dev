@@ -30,7 +30,7 @@ class Classifier:
     :param dmax: Maximum distance threshold for adjacency (default: 5.0m)
     """
 
-    def __init__(self, dmax=5.0):
+    def __init__(self, dmax=5.5):
         print("Classifier Initialized.")
 
         self.dmax = dmax
