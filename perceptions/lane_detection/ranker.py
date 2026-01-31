@@ -8,6 +8,14 @@ from perceptions.lane_detection.geo import (
 )
 
 
+def IoU(ctx: PerceptualFieldContext, candidate: LaneCandidate) -> float:
+    I = len(ctx.left_boundary & set(candidate.left_path)) + len(ctx.right_boundary & set(candidate.right_path))
+    U = len(ctx.left_boundary | set(candidate.left_path)) + len(ctx.right_boundary | set(candidate.right_path))
+    if U == 0:
+        return 0
+    return I/U
+    
+
 def get_path_stats(path_indices: list[int], context: PerceptualFieldContext):
     """
     Computes path statistics required for features:
