@@ -17,9 +17,11 @@ def train_model(
     model,
     epochs=250,
     batch_size=32,
-    learning_rate=0.005,
+    learning_rate=0.001,
     L=50,
-    optimizer_=optim.Adam,
+    optimizer_=optim.AdamW,
+    eta_min=1e-6,
+    patience=50,
 ):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -27,8 +29,8 @@ def train_model(
     # Add weight decay for L2 regularization
     optimizer = optimizer_(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     # Add learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=10
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer=optimizer, T_max=epochs, eta_min=eta_min
     )
     # Binary cross entropy loss for pairwise ranking
     # We're predicting probability that candidate 1 is better than candidate 2
@@ -37,7 +39,6 @@ def train_model(
     best_val_loss = float("inf")
     best_val_accuracy = 0
     epochs_no_improve = 0
-    patience = 50  # Reduced patience for small dataset
     min_delta = 0.001  # Minimum change to qualify as improvement
 
     # Track metrics for plotting
@@ -120,12 +121,12 @@ def train_model(
 
         # Update learning rate based on validation loss
         old_lr = optimizer.param_groups[0]["lr"]
-        scheduler.step(val_loss)
+        scheduler.step()
         new_lr = optimizer.param_groups[0]["lr"]
 
         # Log learning rate changes
-        if new_lr != old_lr:
-            print(f"Learning rate reduced from {old_lr:.6f} to {new_lr:.6f}")
+        # if new_lr != old_lr:
+        #     print(f"Learning rate reduced from {old_lr:.6f} to {new_lr:.6f}")
 
         print(
             f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_accuracy:.2f}%, LR: {optimizer.param_groups[0]['lr']:.6f}"
@@ -341,8 +342,8 @@ def main(mode="train", model_path="model.pth"):
             val_dataset,
             model,
             epochs=250,
-            batch_size=128,
-            learning_rate=0.0015,
+            batch_size=32,
+            learning_rate=0.001,
             L=50,
         )
 
