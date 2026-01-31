@@ -270,81 +270,85 @@ def enumerate_path_pairs(
 
         # Line 13: % Choose next vertices for both sides
         # Line 14: n_a ← NVD(P[s], u_a) for s ∈ {0, 1}
-        n_left = next_vertex_decider(ctx, P_current.left_path, ctx.car_heading)
-        n_right = next_vertex_decider(ctx, P_current.right_path, ctx.car_heading)
+        # Filter NVD results to only include unvisited nodes (u_a)
+        all_n_left = next_vertex_decider(ctx, P_current.left_path, ctx.car_heading)
+        n_left = [n for n in all_n_left if n in u_left]
+
+        all_n_right = next_vertex_decider(ctx, P_current.right_path, ctx.car_heading)
+        n_right = [n for n in all_n_right if n in u_right]
 
         if n_right and n_left:
             # Line 15: if u_0 ≠ ∅ ∧ u_1 ≠ ∅ then
-            if u_left and u_right:
-                # Line 16: s ← LRD(P_0, u_0, P_1, u_1)
-                # LRD takes left lane, right lane, left candidate, right candidate
-                s = left_right_decider(
-                    ctx,
-                    P_current.left_path,
-                    P_current.right_path,
-                    n_left[0] if n_left else None,
-                    n_right[0] if n_right else None,
-                )
-            elif not u_left:  # Line 17
-                s = 1
-            else:
-                s = 0
-        elif not n_left:
+            # Note: u_left/u_right checks above effectively check n_left/n_right since we filtered
+            # Line 16: s ← LRD(P_0, u_0, P_1, u_1)
+            # LRD takes left lane, right lane, left candidate, right candidate
+            # Using the *best* candidate from each side for the heuristic comparison
+            s = left_right_decider(
+                ctx,
+                P_current.left_path,
+                P_current.right_path,
+                n_left[0],
+                n_right[0],
+            )
+        elif n_right:  # Only right has candidates
             s = 1
-        else:
+        elif n_left:  # Only left has candidates
             s = 0
+        else:
+            return
 
-        # Line 18: P[s].push(n_s)
-        if s == 0:  # Left side
-            next_vertex = n_left[0] if n_left else list(u_left)[0]
-            P_new = LaneCandidate(
-                left_path=P_current.left_path + [next_vertex],
-                right_path=P_current.right_path,
-                left_visited=P_current.left_visited
-                | {next_vertex},  # Line 19: V[s][c_s].add(n_s)
-                right_visited=P_current.right_visited,
-                matchings=P_current.matchings,
+        # Get the sorted list of candidates for the chosen side
+        candidates = n_left if s == 0 else n_right
+
+        # Iterate over ALL candidates (DFS Enumeration)
+        for next_vertex in candidates:
+            # Line 18: P[s].push(n_s)
+            if s == 0:  # Left side
+                P_new = LaneCandidate(
+                    left_path=P_current.left_path + [next_vertex],
+                    right_path=P_current.right_path,
+                    left_visited=P_current.left_visited | {next_vertex},
+                    right_visited=P_current.right_visited,
+                    matchings=P_current.matchings,
+                )
+            else:  # Right side (s == 1)
+                P_new = LaneCandidate(
+                    left_path=P_current.left_path,
+                    right_path=P_current.right_path + [next_vertex],
+                    left_visited=P_current.left_visited,
+                    right_visited=P_current.right_visited | {next_vertex},
+                    matchings=P_current.matchings,
+                )
+
+            updated_matchings, min_w, max_w = online_lane_width(
+                ctx, P_new
+            )  # Note: P_new here
+            P_new.matchings = updated_matchings
+
+            # Line 20: if CD(P) then append to Φ
+            if (
+                C_seg(P_new, ctx, side="left")
+                and C_seg(P_new, ctx, side="right")
+                and C_poly(P_new, ctx)
+                and C_width(P_new, ctx)
+            ):
+                state.Phi.append(P_new)
+
+            # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
+            violation_in_fixed = any(
+                w < W_MIN or w > W_MAX for w in updated_matchings.fixed_widths
             )
-        else:  # Right side (s == 1)
-            next_vertex = n_right[0] if n_right else list(u_right)[0]
-            P_new = LaneCandidate(
-                left_path=P_current.left_path,
-                right_path=P_current.right_path + [next_vertex],
-                left_visited=P_current.left_visited,
-                right_visited=P_current.right_visited
-                | {next_vertex},  # Line 19: V[s][c_s].add(n_s)
-                matchings=P_current.matchings,
+            should_backtrack = backtracking_decider(
+                min_width=min_w,
+                max_width=max_w,
+                violation_in_fixed_set=violation_in_fixed,
             )
 
-        updated_matchings, min_w, max_w = online_lane_width(ctx, P_current)
-        P_new.matchings = updated_matchings
+            if not should_backtrack:
+                # Line 23: Γ ← Γ ∪ EPP(G, P, V, i)
+                _enumerate(P_new)
 
-        # Line 20: if CD(P) then append to Φ
-        if (
-            C_seg(P_new, ctx, side="left")
-            and C_seg(P_new, ctx, side="right")
-            and C_poly(P_new, ctx)
-            and C_width(P_new, ctx)
-        ):
-            state.Phi.append(P_new)
-
-        # Line 22: if ¬BTD(P, u_0 ≠ ∅, u_1 ≠ ∅) then VI-B
-
-        # Check for violations in the fixed set
-        # violation_in_fixed is True if any FIXED width is outside [W_MIN, W_MAX]
-        violation_in_fixed = any(
-            w < W_MIN or w > W_MAX for w in updated_matchings.fixed_widths
-        )
-        should_backtrack = backtracking_decider(
-            min_width=min_w, max_width=max_w, violation_in_fixed_set=violation_in_fixed
-        )
-
-        if not should_backtrack:
-            # Line 23: Γ ← Γ ∪ EPP(G, P, V, i)
-            _enumerate(P_new)
-
-        # Line 24: P[s].pop()
-        # (Implicit in recursion: we return and don't modify P_new further)
+            # Line 24: P[s].pop() - Implicit by using P_new and Next Loop Iteration
 
     # Start enumeration with initial candidate
     _enumerate(P)

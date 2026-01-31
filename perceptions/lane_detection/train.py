@@ -382,10 +382,16 @@ def main(mode="train", model_path="model.pth"):
     # Note: Dataset class also has 'augment' flag which adds feature noise.
     # We keep that for training (regularization), disable for val.
     train_dataset = LaneDetectionDataset(
-        contexts=train_contexts, augment=True, perceptual_range=30
+        contexts=train_contexts,
+        augment=True,
+        perceptual_range=30,
+        cache_path="train_cache.pt",
     )
     val_dataset = LaneDetectionDataset(
-        contexts=val_contexts, augment=False, perceptual_range=30
+        contexts=val_contexts,
+        augment=False,
+        perceptual_range=30,
+        cache_path="val_cache.pt",
     )
 
     if mode == "eval":

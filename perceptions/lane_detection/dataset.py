@@ -11,6 +11,8 @@ import numpy as np
 from typing import List, Tuple
 import itertools
 
+import os
+from multiprocessing import Pool
 from perceptions.lane_detection.models import LaneCandidate, PerceptualFieldContext
 from perceptions.lane_detection.geo import find_starting_vertices
 from perceptions.lane_detection.deciders import enumerate_path_pairs
@@ -78,6 +80,51 @@ def generate_lane_candidates(
     return all_candidates[:max_candidates]
 
 
+def process_context(ctx: PerceptualFieldContext) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Worker function to process a single context.
+    Generates candidates, extracts features/IoUs, and forms pairs.
+    """
+    data_pairs = []
+
+    # Generate candidates for this context
+    candidates = generate_lane_candidates(ctx, max_candidates=200)
+
+    if len(candidates) < 2:
+        return []
+
+    # Compute features and IoU for each candidate
+    candidate_data = []
+    for candidate in candidates:
+        features = extract_features(candidate, ctx)
+        iou = IoU(ctx, candidate)
+        candidate_data.append((features.numpy(), iou))
+
+    # Create pairwise combinations
+    pair_idx = 0
+    for (feat1, iou1), (feat2, iou2) in itertools.combinations(candidate_data, 2):
+        # Skip ambiguous pairs where IoU difference is small FIRST
+        if abs(iou1 - iou2) < 0.05:
+            continue
+
+        # Deterministic ordering: always put higher IoU first
+        if iou1 < iou2:
+            feat1, feat2 = feat2, feat1
+            iou1, iou2 = iou2, iou1
+
+        # Now swap exactly 50% using pair index for determinism
+        if pair_idx % 2 == 0:
+            feat1, feat2 = feat2, feat1
+            iou1, iou2 = iou2, iou1
+
+        feature_pairs = np.stack([feat1, feat2], axis=0)  # (2, 8)
+        iou_pairs = np.array([iou1, iou2], dtype=np.float32)  # (2,)
+        data_pairs.append((feature_pairs, iou_pairs))
+        pair_idx += 1
+
+    return data_pairs
+
+
 class LaneDetectionDataset(Dataset):
     """
     Dataset for pairwise lane candidate ranking.
@@ -95,6 +142,7 @@ class LaneDetectionDataset(Dataset):
         augment: bool = False,
         perceptual_range: int = 30,
         contexts: List[PerceptualFieldContext] = None,
+        cache_path: str = None,
     ):
         """
         Initialize the dataset.
@@ -104,13 +152,21 @@ class LaneDetectionDataset(Dataset):
             augment: Whether to apply data augmentation
             perceptual_range: Range for perceptual field generation
             contexts: Optional list of contexts to use (prevents leakage if split beforehand)
+            cache_path: Optional path to save/load cached dataset (.pt file)
         """
         self.augment = augment
 
         if data is not None:
             self.data = data
+        elif cache_path and os.path.exists(cache_path):
+            print(f"Loading cached dataset from {cache_path}...")
+            self.data = torch.load(cache_path)
+            print(f"Loaded {len(self.data)} pairs from cache.")
         else:
             self.data = self._generate_dataset(perceptual_range, contexts)
+            if cache_path:
+                print(f"Saving dataset to cache {cache_path}...")
+                torch.save(self.data, cache_path)
 
     def _generate_dataset(
         self, perceptual_range: int, contexts: List[PerceptualFieldContext] = None
@@ -128,51 +184,20 @@ class LaneDetectionDataset(Dataset):
                 perceptual_range=perceptual_range
             )
         print(f"Generating dataset from {len(contexts)} perceptual fields...")
+        print(f"Using {os.cpu_count()} CPU cores for generation...")
 
-        for ctx_idx, ctx in enumerate(contexts):
-            # Generate candidates for this context
-            candidates = generate_lane_candidates(ctx, max_candidates=200)
+        # Use multiprocessing to speed up generation
+        with Pool(processes=os.cpu_count()) as pool:
+            # Use imap_unordered to get results as they complete for progress tracking
+            total_ctx = len(contexts)
+            results_iter = pool.imap_unordered(process_context, contexts)
 
-            if len(candidates) < 2:
-                continue
-
-            # Compute features and IoU for each candidate
-            candidate_data = []
-            for candidate in candidates:
-                features = extract_features(candidate, ctx)
-                iou = IoU(ctx, candidate)
-                candidate_data.append((features.numpy(), iou))
-
-            # Create pairwise combinations
-            pair_idx = 0
-            for (feat1, iou1), (feat2, iou2) in itertools.combinations(
-                candidate_data, 2
-            ):
-                # Skip ambiguous pairs where IoU difference is small FIRST
-                # This reduces label noise by ignoring "ties"
-                if abs(iou1 - iou2) < 0.05:
-                    continue
-
-                # Deterministic ordering: always put higher IoU first
-                if iou1 < iou2:
-                    feat1, feat2 = feat2, feat1
-                    iou1, iou2 = iou2, iou1
-
-                # Now swap exactly 50% using pair index for determinism
-                # This ensures class balance: 50% have iou1 > iou2, 50% have iou1 < iou2
-                if pair_idx % 2 == 0:
-                    feat1, feat2 = feat2, feat1
-                    iou1, iou2 = iou2, iou1
-
-                feature_pairs = np.stack([feat1, feat2], axis=0)  # (2, 8)
-                iou_pairs = np.array([iou1, iou2], dtype=np.float32)  # (2,)
-                data.append((feature_pairs, iou_pairs))
-                pair_idx += 1
-
-            if (ctx_idx + 1) % 10 == 0:
-                print(
-                    f"  Processed {ctx_idx + 1}/{len(contexts)} contexts, {len(data)} pairs so far"
-                )
+            for i, res in enumerate(results_iter):
+                data.extend(res)
+                if (i + 1) % 10 == 0 or (i + 1) == total_ctx:
+                    print(
+                        f"  Processed {i + 1}/{total_ctx} contexts ({(i + 1) / total_ctx * 100:.1f}%)"
+                    )
 
         print(f"Generated {len(data)} training pairs")
         return data
