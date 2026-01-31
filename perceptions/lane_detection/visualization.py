@@ -352,6 +352,19 @@ def visualize_epp_results(
     circle = plt.Circle(car_pos, perceptual_range, fill=False, color='red', linestyle='--', alpha=0.5)
     ax1.add_patch(circle)
     
+    # Draw cone boundaries (120 deg)
+    cone_angle = 120 * np.pi / 180
+    left_angle = car_heading_rad + cone_angle / 2
+    right_angle = car_heading_rad - cone_angle / 2
+    
+    lx = car_pos[0] + perceptual_range * np.cos(left_angle)
+    ly = car_pos[1] + perceptual_range * np.sin(left_angle)
+    rx = car_pos[0] + perceptual_range * np.cos(right_angle)
+    ry = car_pos[1] + perceptual_range * np.sin(right_angle)
+    
+    ax1.plot([car_pos[0], lx], [car_pos[1], ly], 'r--', alpha=0.5, linewidth=1, label='FOV Limit')
+    ax1.plot([car_pos[0], rx], [car_pos[1], ry], 'r--', alpha=0.5, linewidth=1)
+    
     ax1.set_xlabel('X (meters)')
     ax1.set_ylabel('Y (meters)')
     ax1.set_title(f'Perceptual Field ({len(subgraph)} visible nodes)')

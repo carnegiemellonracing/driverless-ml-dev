@@ -81,6 +81,10 @@ class PerceptualFieldContext:
 
     # Optional: NVD cache for neighbor sorting during path enumeration
     nvd_cache: Dict[Tuple[int, int], List[int]] = field(default_factory=dict)
+    
+    # Ground Truth Labels (for training generation)
+    gt_left_idx: int = None
+    gt_right_idx: int = None
 
     def get_point(self, global_idx: int) -> np.ndarray:
         """Get point coordinates by global index (direct access to shared map)."""

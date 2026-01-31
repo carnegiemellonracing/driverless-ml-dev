@@ -4,9 +4,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-from data_loader import generate_perceptual_field_data
-from dataset import LaneDetectionDataset
-from model import ConeClassifier
+from perceptions.lane_detection.data_loader import generate_perceptual_field_data
+from perceptions.lane_detection.dataset import LaneDetectionDataset
+from perceptions.lane_detection.model import ConeClassifier
 
 def train_model(train_dataset, val_dataset, model, epochs=250, batch_size=128, learning_rate=0.0015, L = 50, optimizer_ = optim.Adam):
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -265,7 +265,7 @@ def train_pairwise_model(train_dataset, val_dataset, model, epochs=250, batch_si
 
     KEEP existing train_model() unchanged!
     """
-    from data_loader import collate_fn_pairwise
+    from perceptions.lane_detection.data_loader import collate_fn_pairwise
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_pairwise)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_pairwise)
@@ -395,7 +395,7 @@ def evaluate_pairwise_model(model, dataset):
     - Ranking accuracy: % of correct pairwise preferences
     - Average confidence scores
     """
-    from data_loader import collate_fn_pairwise
+    from perceptions.lane_detection.data_loader import collate_fn_pairwise
 
     model.eval()
     correct = 0
@@ -429,12 +429,13 @@ def main_pairwise(mode='train', model_path='model_pairwise.pth'):
 
     KEEP existing main() unchanged!
     """
-    from data_loader import generate_pairwise_training_data
+    from perceptions.lane_detection.data_loader import generate_pairwise_training_data, cone_maps, left_boundaries, right_boundaries
     from torch.utils.data import random_split
 
     # Generate pairwise training data using new pipeline
     print("Generating pairwise training data...")
-    full_dataset = generate_pairwise_training_data(boundaries, cone_maps)
+    # Map data from loader
+    full_dataset = generate_pairwise_training_data(left_boundaries, right_boundaries, cone_maps)
 
     if len(full_dataset) == 0:
         print("Error: No training data generated!")

@@ -1,13 +1,14 @@
+
 import os
 import yaml
 import numpy as np
 import math
-from typing import Dict, List
-from geo import within_range, within_cone
-from models import PerceptualFieldContext 
+from typing import Dict, List, Tuple
+from perceptions.lane_detection.geo import within_range, within_cone
+from perceptions.lane_detection.models import PerceptualFieldContext 
+
 """
 Reading from the dataset
-
 """
 dataset_path = f"{os.path.dirname(__file__)}/dataset/processed"
 
@@ -51,14 +52,8 @@ def build_adjacency_graph(cone_map, dmax=5.0):
 def subgraph_add(subgraph, point, graph):
     """
     Add a point and its neighbors to the subgraph.
-    
-    Args:
-        subgraph: Current subgraph dict
-        point: Point id
-        graph: Adjacency list 
     """
     if point in subgraph:
-        print("Subgraph add detected duplicate point")
         return subgraph
     
     #Create new entry
@@ -79,14 +74,6 @@ def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
     """
     Returns:
     - Subgraph perceptual field
-    
-    Args:
-        left_point: Cone ID of the left boundary point to use as reference
-        left_boundary: List of cone IDs that are left boundary
-        right_boundary: List of cone IDs that are right boundary
-        cone_map: nx2 np.array mapping cone_id to [x, y] coordinates
-        perceptual_range: Range in meters
-        graph: Adjacency list
     """
     # Store all points within the perceptual range 
     subgraph = {}
@@ -97,11 +84,6 @@ def filter_points_within_range(car_pos: np.array, car_heading_rad: float,
     return subgraph
 
 def get_closest(point_id, boundary, cone_map):
-    """
-        Takes point id, boundary (list of indicies), and dictionary that maps ids to point locations
-        Returns the point closest to point_id within boundary, returns ID
-        Will return point_id if it is in the boundary, will return [] if no points in boundary
-    """
     min_dist = float('inf')
     closest_id = []
     pt = cone_map[point_id]
@@ -115,12 +97,6 @@ def get_closest(point_id, boundary, cone_map):
     return closest_id
 
 def get_car_pos(left_id, right_boundary, cone_map, noise=False):
-    """
-        Takes point on left boundary, entire right_boundary, cone_map, and optional noise parameters
-        Returns potential car position and heading in radians
-            position is midpoint between left point and closest right point
-            heading is perpendicular to the line between the left point and closest right point
-    """
     closest_right_id = get_closest(left_id, right_boundary, cone_map)
     closest_right_pt = cone_map[closest_right_id]
     left_pt = cone_map[left_id]
@@ -131,26 +107,17 @@ def get_car_pos(left_id, right_boundary, cone_map, noise=False):
 
     #Perpendicular so negative reciprocal
     flip = np.random.choice([-1,1]) if noise else 1.0
-    car_heading_rad = flip * math.atan2(
-        left_pt[0] - closest_right_pt[0], left_pt[1] - closest_right_pt[1]) + angle_noise
+    dx = left_pt[0] - closest_right_pt[0]
+    dy = left_pt[1] - closest_right_pt[1]
+    car_heading_rad = flip * math.atan2(dx, dy) + angle_noise
+    
     return midpt, car_heading_rad
 
 def generate_perceptual_field_data(
     left_boundary, right_boundary, cone_map, perceptual_range=30, dmax=5
 ) -> List[PerceptualFieldContext]:
     """
-    Take a left and right boundary, the cone map, and some params.
     Returns a list of PerceptualFieldContext objects representing different viewpoints.
-
-    Args:
-        left_boundary: List of indices for left boundary cones
-        right_boundary: List of indices for right boundary cones
-        cone_map: Nx2 numpy array of cone positions (shared across all returned contexts)
-        perceptual_range: Range in meters for visibility
-        dmax: Maximum distance for adjacency graph
-
-    Returns:
-        List of PerceptualFieldContext objects (all sharing the same cone_map reference)
     """
     contexts = []
     # Build adjacency graph with cone_id mapping
@@ -166,13 +133,146 @@ def generate_perceptual_field_data(
         # Get the set of visible indices from the subgraph
         visible_indices = set(subgraph.keys())
 
+        # Get GT pairs
+        closest_right_id = get_closest(left_id, right_boundary, cone_map)
+
         ctx = PerceptualFieldContext(
             cone_map=cone_map,
             visible_indices=visible_indices,
             adj_list=subgraph,
             car_pos=car_pos,
             car_heading=car_heading_rad,
+            gt_left_idx=left_id,
+            gt_right_idx=closest_right_id
         )
         contexts.append(ctx)
 
     return contexts
+
+def generate_noisy_perceptual_field_data(
+    left_boundary, right_boundary, cone_map,
+    position_noise_std=0.3, false_positive_rate=0.2,
+    perceptual_range=30, dmax=5, seed=None
+) -> Tuple[List[PerceptualFieldContext], np.ndarray, List[int], List[int], List[int]]:
+    """
+    Generates noisy perceptual field contexts.
+    Returns (contexts, noisy_map, left_indices, right_indices, fp_indices)
+    """
+    if seed is not None: np.random.seed(seed)
+    
+    # 1. Add position noise
+    noisy_map = cone_map + np.random.normal(0, position_noise_std, cone_map.shape)
+    
+    # 2. Add False Positives (clutter)
+    num_cones = len(cone_map)
+    num_fp = int(num_cones * false_positive_rate)
+    
+    if num_fp > 0:
+        # Generate "HARD" noise as requested:
+        # 1. Ghost cones nearby existing cones (hard to filter by distance)
+        # 2. Debris between lanes (hard to filter by width if they form false segments)
+
+        
+        fp_points = []
+        for _ in range(num_fp):
+            mode = np.random.choice(['ghost', 'debris'])
+            
+            if mode == 'ghost':
+                # Pick a random existing cone and spawn a ghost near it
+                idx = np.random.randint(0, len(noisy_map))
+                ref_pt = noisy_map[idx]
+                offset = np.random.uniform(-4.0, 4.0, 2) # Within 4m
+                fp_points.append(ref_pt + offset)
+            else:
+                # Pick random ref point and add larger offset to simulate debris or cross-track clutter
+                idx = np.random.randint(0, len(noisy_map))
+                ref_pt = noisy_map[idx]
+                # Random direction, dist 2-8m
+                angle = np.random.uniform(0, 2*np.pi)
+                dist = np.random.uniform(2.0, 8.0)
+                offset = np.array([dist*np.cos(angle), dist*np.sin(angle)])
+                fp_points.append(ref_pt + offset)
+                
+        fp_points = np.array(fp_points)
+        combined_map = np.vstack([noisy_map, fp_points])
+    else:
+        combined_map = noisy_map
+        fp_points = []
+
+    fp_indices = list(range(num_cones, num_cones + num_fp)) if num_fp > 0 else []
+    
+    # 3. Build Graph
+    adj = build_adjacency_graph(combined_map, dmax)
+    
+    # 4. Generate Contexts
+    contexts = []
+    
+    # Use bounds to drive along track
+    for i in range(0, len(left_boundary), 3): # Skip some for speed
+        l_idx = left_boundary[i]
+        
+        # Car pos derived from (noisy) track points
+        # Use simple midpoint of noisy points to simulate car being on track but seeing noise
+        cp, ch = get_car_pos(l_idx, right_boundary, combined_map, noise=True) # Add car noise too
+        
+        subgraph = filter_points_within_range(cp, ch, combined_map, adj, perceptual_range)
+        
+        ctx = PerceptualFieldContext(
+            cone_map=combined_map,
+            visible_indices=set(subgraph.keys()),
+            adj_list=subgraph,
+            car_pos=cp,
+            car_heading=ch
+        )
+        contexts.append(ctx)
+        
+    return contexts, combined_map, left_boundary, right_boundary, fp_indices
+
+def generate_pairwise_training_data(left_boundaries, right_boundaries, cone_maps):
+    """
+    Generates dataset for pairwise ranking training.
+    """
+    from perceptions.lane_detection.dataset import LaneDetectionDataset
+    # Triple boundaries and maps
+    maps_data = list(zip(left_boundaries, right_boundaries, cone_maps))
+    return LaneDetectionDataset(maps_data)
+
+def collate_fn_pairwise(batch):
+    """
+    Collate function for pairwise ranking.
+    Batch elements are (features_pair, iou_pair).
+    Returns: (features1, features2, labels)
+    """
+    import torch
+    
+    f1_list, f2_list, label_list = [], [], []
+    
+    for feats, ious in batch:
+        # feats shape: (2, D)
+        # ious shape: (2,)
+        
+        f1 = feats[0]
+        f2 = feats[1]
+        
+        iou1 = ious[0]
+        iou2 = ious[1]
+        
+        # Label: 1 if cand1 better, 0 if cand2 better
+        # We skip pairs with identical IoU? Or just use 0.5?
+        # BCEWithLogitsLoss expects float targets (probabilities) for mixup or smooth labels, 
+        # or 0/1 for hard classification.
+        # Let's use hard 0/1, filtering equal cases or randomizing.
+        
+        if abs(iou1 - iou2) < 1e-4:
+            continue # Skip ambiguous pairs to reduce noise
+            
+        label = 1.0 if iou1 > iou2 else 0.0
+        
+        f1_list.append(f1)
+        f2_list.append(f2)
+        label_list.append(label)
+        
+    if not f1_list:
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
+        
+    return torch.stack(f1_list), torch.stack(f2_list), torch.tensor(label_list, dtype=torch.float32)

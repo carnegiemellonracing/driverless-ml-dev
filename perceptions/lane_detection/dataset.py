@@ -1,8 +1,8 @@
 from torch.utils.data import Dataset
 import torch
 import numpy as np
-from geo import enumerate_path_pairs_v2
-from data_loader import generate_perceptual_field_data, load_yaml_data
+from perceptions.lane_detection.geo import enumerate_path_pairs_v2
+from perceptions.lane_detection.data_loader import generate_perceptual_field_data, load_numpy_data
 import math
 import os
 
@@ -20,33 +20,35 @@ class LaneDetectionDataset(Dataset):
         self.augment = augment
 
     def create_dataset(self, maps):
-        from geo import compute_features, compute_lane_iou
+        from perceptions.lane_detection.geo import compute_features, compute_lane_iou
         
         self.data = []
         
-        for bound, points in maps:
+        for left_b, right_b, points in maps:
             # Generate perceptual fields from ground truth
-            perceptual_fields = generate_perceptual_field_data(bound, points)
+            perceptual_fields = generate_perceptual_field_data(left_b, right_b, points)
             
-            for car_heading_rad, paths, subgraph, left_subset, right_subset in perceptual_fields:
+            for ctx in perceptual_fields:
+                car_heading_rad = ctx.car_heading
+                
                 h_vec = [math.cos(car_heading_rad), math.sin(car_heading_rad)]
                 
                 # 1. Run EPP to get candidates
-                # Use current GT visible subset as start nodes is unrealistic for inference, 
-                # but for training data generation we need candidates that are reachable.
-                # In inference we use NVD/LRD to find start nodes. 
-                # Here we follow the existing pattern: use the visible subset's first points.
-                if not left_subset or not right_subset:
-                    continue
-                    
-                sl, sr = int(left_subset[0]), int(right_subset[0])
+                sl, sr = ctx.gt_left_idx, ctx.gt_right_idx
+                
+                # Verify they are visible (might be filtered if perceptual range is short)
+                if sl not in ctx.visible_indices or sr not in ctx.visible_indices:
+                     print(f"Skipping: Start points {sl, sr} not visible. Visible count: {len(ctx.visible_indices)}")
+                     continue
+                
                 initial_visited = {sl, sr}
                 # Run EPP
                 candidates = enumerate_path_pairs_v2(
-                    subgraph, points, ([sl], [sr]), initial_visited, h_vec, 0, itmax=500
+                    ctx.adj_list, points, ([sl], [sr]), initial_visited, h_vec, 0, itmax=500
                 )
                 
                 if len(candidates) < 2:
+                    print(f"Skipping: EPP found only {len(candidates)} candidates.")
                     continue
                 
                 # 2. Compute Features and IoU for all candidates
@@ -76,6 +78,8 @@ class LaneDetectionDataset(Dataset):
                         merged_ious = np.array([cand_ious[i], cand_ious[j]], dtype=np.float32)
                         
                         self.data.append((merged_feats, merged_ious))
+        
+        return self.data
 
     def __len__(self):
         return len(self.data)
@@ -107,4 +111,4 @@ if __name__ == "__main__":
     cone_map_paths = [f"{dataset_path}/cone_map_{i}.yaml" for i in range(1, 10)]
     boundaries = [load_yaml_data(path) for path in boundary_paths]
     cone_maps = [load_yaml_data(path) for path in cone_map_paths]
-    LaneDetectionDataset(zip(boundaries, cone_maps))
+    LaneDetectionDataset(zip(boundaries, boundaries, cone_maps)) # Dummy right boundaries
