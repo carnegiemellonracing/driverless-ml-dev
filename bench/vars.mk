@@ -1,8 +1,13 @@
 # Paths
-ONNX      := ml_data/model_saves/26v_runs/yolo26n/best_26n.onnx
-ENGINE    := ml_data/model_saves/engines/yolo26n.fp16.engine
+ONNX      := ml_data/model_saves/26v_runs/yolov26s_tuned/26s_tuned_best.onnx
+ENGINE    := ml_data/model_saves/26v_runs/yolov26s_tuned/26s_tuned_best.engine
 IMG       := ml_data/fsoco_yolo/images/test/amz_amz_00097.jpg
+DATASET   := ml_data/fsoco_yolo
 INFER_BIN := yolo-inference/build/inference
+
+# Validation thresholds
+VAL_CONF  := 0.5
+VAL_IOU   := 0.5
 
 # TensorRT build knobs (edit these)
 TRT_PREC  := --fp16             # mixed precision depending on hardware support 

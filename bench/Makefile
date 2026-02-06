@@ -2,11 +2,12 @@ include bench/vars.mk
 
 TRT_WS_FLAG := $(shell trtexec --help 2>/dev/null | grep -q -- '--memPoolSize' && echo "--memPoolSize=workspace:$(TRT_WS)" || echo "--workspace=$(TRT_WS)")
 
-.PHONY: engine run profile show infer_bin
+.PHONY: engine run profile show infer_bin validate
 
 # ---- Define the commands once ----
 TRT_CMD    := trtexec --onnx=$(ONNX) --saveEngine=$(ENGINE) $(TRT_PREC) $(TRT_WS_FLAG) $(TRT_EXTRA) # $(TRT_SHAPES)
 INFER_CMD  := $(INFER_BIN) $(ENGINE) $(IMG)
+VAL_CMD    := $(INFER_BIN) $(ENGINE) $(DATASET) val $(VAL_CONF) $(VAL_IOU)
 NSYS_CMD   := sudo nsys profile $(NSYS_OPTS) --output=$(NSYS_OUT) $(INFER_CMD)
 
 show:
@@ -15,6 +16,9 @@ show:
 	@echo
 	@echo "infer command:"
 	@echo $(INFER_CMD)
+	@echo
+	@echo "validate command:"
+	@echo $(VAL_CMD)
 	@echo
 	@echo "profile command:"
 	@echo $(NSYS_CMD)
@@ -41,3 +45,6 @@ run:
 profile:
 	mkdir -p $(dir $(NSYS_OUT))
 	$(NSYS_CMD) | tee $(NSYS_OUT).nsys.log
+
+validate:
+	$(VAL_CMD) | tee $(ENGINE).val.log
