@@ -8,9 +8,9 @@ class ConeClassifier(nn.Module):
         super().__init__()
         self.bn = nn.BatchNorm1d(8)
         self.fc1 = nn.Linear(8, 128)
-        self.dropout1 = nn.Dropout(0.4)
+        self.dropout1 = nn.Dropout(0.2)
         self.fc2 = nn.Linear(128, 64)
-        self.dropout2 = nn.Dropout(0.5)
+        self.dropout2 = nn.Dropout(0.1)
         self.fc3 = nn.Linear(64, 1)
 
     def forward(self, x):
