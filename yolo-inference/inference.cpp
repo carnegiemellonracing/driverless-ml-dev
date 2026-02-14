@@ -4,10 +4,15 @@
 #include <string>
 #include <chrono>
 #include <unordered_map>
+#include <memory>
 
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
 #include <NvInfer.h>
+
+#include <cvcuda/OpResizeCropConvertReformat.hpp>
+#include <nvcv/Tensor.hpp>
+#include <nvcv/TensorData.hpp>
 
 using namespace nvinfer1;
 
@@ -34,7 +39,7 @@ public:
     std::vector<Detection> detect (const cv::Mat& img, float conf);
 
 private:
-    std::vector<float> preprocess(const cv::Mat& img);
+    void preprocessCudaToInputMem(const cv::Mat& img);
 
     Logger logger;
     ICudaEngine* engine;
@@ -42,14 +47,27 @@ private:
     IExecutionContext* context;
     cudaStream_t stream = nullptr;
 
+    std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op;
+
+    nvcv::Tensor input_tensor;
+    nvcv::Tensor output_tensor;
+
+    void* d_input_u8 = nullptr;
     void* input_mem = nullptr;
     void* output_mem = nullptr;
+
+    int last_input_width = 0;
+    int last_input_height = 0;
+    static constexpr int MODEL_W = 640;
+    static constexpr int MODEL_H = 640;
 
     static const int INPUT_SIZE = 1 * 3 * 640 * 640 * sizeof(float);
     static const int OUTPUT_SIZE = 1 * 300 * 6 * sizeof(float);
     static const int MAX_OUTPUT_DETECTIONS = 300;
     const char* INPUT_BLOB_NAME = "images";
     const char* OUTPUT_BLOB_NAME = "output0";
+
+    size_t d_input_capacity = 0;
 };
 
 YOLODetector::YOLODetector(std::string engine_file_path) {
@@ -78,9 +96,23 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     cudaMalloc(&output_mem, OUTPUT_SIZE);
 
     cudaStreamCreate(&stream);
+
+    preprocess_op = std::make_unique<cvcuda::ResizeCropConvertReformat>();
+
+    nvcv::TensorShape outShape{{1, 3, MODEL_H, MODEL_W}, "NCHW"};
+    nvcv::TensorDataStridedCuda::Buffer outBuf;
+    outBuf.basePtr = static_cast<NVCVByte*>(input_mem);
+    outBuf.strides[3] = sizeof(float);
+    outBuf.strides[2] = MODEL_W * outBuf.strides[3];
+    outBuf.strides[1] = MODEL_H * outBuf.strides[2];
+    outBuf.strides[0] = 3 * outBuf.strides[1];
+    nvcv::TensorDataStridedCuda outData(outShape, nvcv::TYPE_F32, outBuf);
+    output_tensor = nvcv::TensorWrapData(outData);
 }
 
 YOLODetector::~YOLODetector() {
+    if (stream) cudaStreamSynchronize(stream);
+    if (d_input_u8) cudaFree(d_input_u8);
     cudaFree(input_mem);
     cudaFree(output_mem);
 
@@ -91,44 +123,65 @@ YOLODetector::~YOLODetector() {
     delete runtime;
 }
 
-std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
+void YOLODetector::preprocessCudaToInputMem(const cv::Mat& img)
+{
+    cv::Mat host = img.isContinuous() ? img : img.clone();
+    CV_Assert(host.type() == CV_8UC3);
 
-    cv::Mat resized;
-    cv::resize(img, resized, cv::Size(640, 640));
+    int w = host.cols, h = host.rows;
+    size_t bytes = (size_t)w * h * 3;
 
-    cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
-
-    resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
-    
-    // TODO: Implement HWC -> CHW, return result
-    std::vector<float> result(3 * 640 * 640);
-    float* data = result.data();
-
-    const float* ptr = (float*)resized.data;
-    const int num_pixels = 640*640;
-
-    for (int i = 0; i < num_pixels; ++i) {
-        int offset = i * 3;
-
-        data[i] = ptr[offset];
-        data[num_pixels + i] = ptr[offset + 1];
-        data[2 * num_pixels + i] = ptr[offset + 2];
+    // (Re)alloc GPU staging buffer if needed
+    if (bytes > d_input_capacity) {
+        if (d_input_u8) cudaFree(d_input_u8);
+        cudaMalloc(&d_input_u8, bytes);
+        d_input_capacity = bytes;
     }
 
-    return result;
+    // Upload image to GPU staging buffer
+    cudaMemcpyAsync(d_input_u8, host.data, bytes, cudaMemcpyHostToDevice, stream);
+
+    // Wrap staging buffer as NVCV input tensor: NHWC U8
+    {
+        nvcv::TensorShape inShape{{1, h, w, 3}, "NHWC"};
+        nvcv::TensorDataStridedCuda::Buffer inBuf;
+        inBuf.basePtr = static_cast<NVCVByte*>(d_input_u8);
+
+        // Strides in bytes for NHWC:
+        inBuf.strides[3] = 1;                 // C stride
+        inBuf.strides[2] = 3;                 // W stride (3 bytes per pixel)
+        inBuf.strides[1] = w * inBuf.strides[2]; // H stride
+        inBuf.strides[0] = h * inBuf.strides[1]; // N stride
+
+        nvcv::TensorDataStridedCuda inData(inShape, nvcv::TYPE_U8, inBuf);
+        input_tensor = nvcv::TensorWrapData(inData);
+    }
+
+    // Run CV-CUDA op: resize + channel reverse + normalize + layout convert
+    (*preprocess_op)(
+        stream,
+        input_tensor,
+        output_tensor,
+        {MODEL_W, MODEL_H},
+        NVCV_INTERP_LINEAR,
+        {0, 0},                 // crop offset
+        NVCV_CHANNEL_REVERSE,   // BGR -> RGB (since OpenCV is BGR)
+        1.0f / 255.0f,
+        0.0f,
+        false
+    );
 }
 
 std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
 
-    std::vector<float> input = preprocess(img);
+    preprocessCudaToInputMem(img);                 // writes directly into input_mem
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
 
-    cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
     context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
     context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
     context->enqueueV3(stream);
-    cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
 
+    cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
     cudaStreamSynchronize(stream);
     
     std::vector<Detection> results;
