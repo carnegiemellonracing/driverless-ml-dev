@@ -5,6 +5,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <memory>
+#include <cstdlib>
 
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
@@ -106,7 +107,7 @@ YOLODetector::YOLODetector(std::string engine_file_path) {
     outBuf.strides[2] = MODEL_W * outBuf.strides[3];
     outBuf.strides[1] = MODEL_H * outBuf.strides[2];
     outBuf.strides[0] = 3 * outBuf.strides[1];
-    nvcv::TensorDataStridedCuda outData(outShape, nvcv::TYPE_F32, outBuf);
+    nvcv::TensorDataStridedCuda outData(outShape, nvcv::DataType{NVCV_DATA_TYPE_F32}, outBuf);
     output_tensor = nvcv::TensorWrapData(outData);
 }
 
@@ -153,7 +154,7 @@ void YOLODetector::preprocessCudaToInputMem(const cv::Mat& img)
         inBuf.strides[1] = w * inBuf.strides[2]; // H stride
         inBuf.strides[0] = h * inBuf.strides[1]; // N stride
 
-        nvcv::TensorDataStridedCuda inData(inShape, nvcv::TYPE_U8, inBuf);
+        nvcv::TensorDataStridedCuda inData(inShape, nvcv::DataType{NVCV_DATA_TYPE_U8}, inBuf);
         input_tensor = nvcv::TensorWrapData(inData);
     }
 
@@ -226,6 +227,7 @@ int main(int argc, char **argv) {
 
     if (img.empty()) {
         std::cerr << "[ERROR]: image empty at path: " << image_path << std::endl;
+        return 1;
     }
 
     std::cout << "[INFO] Starting Warm-up" << std::endl;
@@ -247,8 +249,8 @@ int main(int argc, char **argv) {
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-    int latency = duration / NUM_ITERATIONS;
-    int fps = 1000.0f / latency;
+    double latency = (double)duration / NUM_ITERATIONS;
+    double fps = 1000.0f / latency;
 
     std::cout << "Average latency: " << latency << " ms." << std::endl;
     std::cout << "Average fps: " << fps << " fps." << std::endl; 
