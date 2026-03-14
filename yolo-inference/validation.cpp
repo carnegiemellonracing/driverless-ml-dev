@@ -213,7 +213,7 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img_bgr, float conf_t
     }
 
     std::vector<Detection> results;
-    results.reserve(64);
+    results.reserve(64); // TODO: validate this line
 
     for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
         int off = i * 6;
@@ -258,6 +258,7 @@ static inline std::string className(int c) {
     return "class_" + std::to_string(c);
 }
 
+//look through the algo to see if it's accurate
 float calculateIoU(const cv::Rect_<float>& a, const cv::Rect_<float>& b) {
     float x1 = std::max(a.x, b.x);
     float y1 = std::max(a.y, b.y);
@@ -376,6 +377,7 @@ struct APResult {
     int num_pred = 0;
 };
 
+//look through the algo to see if it's accurate
 APResult computeAPForClass(const std::vector<PredRecord>& all_preds,
                            const std::vector<GTRecord>& all_gts,
                            int target_cls,
