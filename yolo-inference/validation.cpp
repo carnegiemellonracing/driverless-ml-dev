@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <iomanip>
 #include <memory>
-#include <cmath>
 
 #include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
@@ -213,7 +212,7 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img_bgr, float conf_t
     }
 
     std::vector<Detection> results;
-    results.reserve(64); // TODO: validate this line
+    results.reserve(64);
 
     for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
         int off = i * 6;
@@ -307,54 +306,6 @@ std::string getBaseName(const std::string& path) {
     else lastSlash++;
     if (lastDot == std::string::npos || lastDot < lastSlash) lastDot = path.length();
     return path.substr(lastSlash, lastDot - lastSlash);
-}
-
-// ======================= HSV refinement =======================
-int hsv_classify_cone(const cv::Mat& bgr640, const cv::Rect& roi, bool use_large_orange) {
-    cv::Rect r = roi & cv::Rect(0, 0, bgr640.cols, bgr640.rows);
-    if (r.width <= 2 || r.height <= 2) return 0;
-
-    cv::Mat crop = bgr640(r);
-    cv::Mat hsv;
-    cv::cvtColor(crop, hsv, cv::COLOR_BGR2HSV);
-
-    cv::Scalar meanHSV = cv::mean(hsv);
-    float H = static_cast<float>(meanHSV[0]);
-    float S = static_cast<float>(meanHSV[1]);
-    float V = static_cast<float>(meanHSV[2]);
-
-    if (S < 40 || V < 40) return 0;
-    if (H >= 20 && H <= 40) return 1;   // yellow
-    if (H >= 90 && H <= 130) return 2;  // blue
-    if (H >= 5 && H < 20) {
-        if (use_large_orange && static_cast<float>(r.area()) > 60.0f * 60.0f) return 4;
-        return 3; // orange
-    }
-    return 0;
-}
-
-void apply_unknown_to_hsv_rule(std::vector<Detection>& preds,
-                               const cv::Mat& original_bgr,
-                               float tau,
-                               bool enable_hsv)
-{
-    if (!enable_hsv) return;
-
-    cv::Mat bgr640;
-    cv::resize(original_bgr, bgr640, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-
-    for (auto& p : preds) {
-        if (p.label != 0) continue;
-        if (p.prob < tau) continue;
-
-        cv::Rect roi(static_cast<int>(std::round(p.rect.x)),
-                     static_cast<int>(std::round(p.rect.y)),
-                     static_cast<int>(std::round(p.rect.width)),
-                     static_cast<int>(std::round(p.rect.height)));
-
-        int new_cls = hsv_classify_cone(bgr640, roi, true);
-        if (new_cls != 0) p.label = new_cls;
-    }
 }
 
 // ======================= mAP =======================
@@ -639,9 +590,6 @@ struct Args {
     float map_conf = 0.001f;
     float cm_iou = 0.50f;
 
-    bool hsv = false;
-    float tau = 0.8f;
-
     int warmup = 5;
     int iters = 20;
     int max_images = -1;
@@ -691,9 +639,7 @@ void runValidation(const Args& a) {
 
     std::cout << "[INFO] Validation on " << limit << " images\n"
               << "       map_conf=" << a.map_conf
-              << " cm_iou=" << a.cm_iou
-              << " hsv=" << (a.hsv ? "on" : "off")
-              << " tau=" << a.tau << "\n";
+              << " cm_iou=" << a.cm_iou << "\n";
 
     int processed = 0;
     for (int idx = 0; idx < limit; idx++) {
@@ -706,7 +652,6 @@ void runValidation(const Args& a) {
 
         auto gts = parseYOLOLabels640(label_path);
         auto preds = yolo.detect(img, a.map_conf);
-        apply_unknown_to_hsv_rule(preds, img, a.tau, a.hsv);
 
         for (const auto& g : gts) {
             if (g.label >= 0 && g.label < NUM_CLASSES) {
@@ -734,7 +679,7 @@ void runValidation(const Args& a) {
     std::cout << "Pred boxes kept: " << all_preds.size() << "\n";
 
     reportMAP50(all_preds, all_gts);
-    reportMAP95(all_preds, all_gts);
+    reportMAP5095(all_preds, all_gts);
     printConfusionMatrix(confusion);
 
     std::cout << "========================================\n";
@@ -752,14 +697,14 @@ void runBench(const Args& a) {
     std::cout << "[INFO] Warmup " << a.warmup << " runs...\n";
     for (int i = 0; i < a.warmup; i++) {
         auto preds = yolo.detect(img, a.map_conf);
-        apply_unknown_to_hsv_rule(preds, img, a.tau, a.hsv);
+        (void)preds;
     }
 
     std::cout << "[INFO] Benchmark " << a.iters << " runs...\n";
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < a.iters; i++) {
         auto preds = yolo.detect(img, a.map_conf);
-        apply_unknown_to_hsv_rule(preds, img, a.tau, a.hsv);
+        (void)preds;
     }
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -777,9 +722,9 @@ int main(int argc, char** argv) {
         std::cerr
             << "[USAGE]\n"
             << "  Bench: ./inference <engine_path> <image_path> "
-            << "[--map_conf 0.001] [--hsv 0|1] [--tau 0.8] [--warmup 5] [--iters 20]\n"
+            << "[--map_conf 0.001] [--warmup 5] [--iters 20]\n"
             << "  Val:   ./inference <engine_path> <dataset_dir> val "
-            << "[--map_conf 0.001] [--cm_iou 0.50] [--hsv 0|1] [--tau 0.8] [--max_images N]\n"
+            << "[--map_conf 0.001] [--cm_iou 0.50] [--max_images N]\n"
             << "        dataset_dir must contain images/test and labels/test\n";
         return 1;
     }
@@ -791,13 +736,9 @@ int main(int argc, char** argv) {
 
     a.map_conf   = getOptFloat(argc, argv, "--map_conf", a.map_conf);
     a.cm_iou     = getOptFloat(argc, argv, "--cm_iou", a.cm_iou);
-    a.tau        = getOptFloat(argc, argv, "--tau", a.tau);
     a.warmup     = getOptInt(argc, argv, "--warmup", a.warmup);
     a.iters      = getOptInt(argc, argv, "--iters", a.iters);
     a.max_images = getOptInt(argc, argv, "--max_images", a.max_images);
-
-    std::string hsv_s = getOpt(argc, argv, "--hsv", "");
-    if (!hsv_s.empty()) a.hsv = (hsv_s == "1" || hsv_s == "true" || hsv_s == "on");
 
     if (a.val_mode) runValidation(a);
     else runBench(a);
