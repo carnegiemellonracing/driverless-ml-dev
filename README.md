@@ -109,3 +109,7 @@ Key lesson learned: **optimize for simplicity and real hardware early**.
 - CUDA-based preprocessing and pipelining (cvCUDA)
 - C++ TensorRT inference for Point-to-Pixel integration
 - Batch-2 inference for stereo camera setup
+
+## Branches
+YOLO inference optimization (Jetson, TensorRT, Nsight profiling) is maintained on the `yolo-optimization-api-jetson-nsight` branch.  
+YOLO training, experimentation, and hyperparameter tuning code is on `yolo-optimization-api`.
