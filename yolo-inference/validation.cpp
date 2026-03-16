@@ -7,9 +7,14 @@
 #include <algorithm>
 #include <iomanip>
 #include <memory>
+#include <stdexcept>
+#include <cmath>
 
-#include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/dnn.hpp>
+
+#ifdef USE_TENSORRT
+#include <cuda_runtime.h>
 #include <NvInfer.h>
 #include <nvtx3/nvtx3.hpp>
 
@@ -17,14 +22,42 @@
 #include <nvcv/Tensor.hpp>
 
 using namespace nvinfer1;
+#endif
 
-// ======================= Detection + Logger =======================
+// ======================= Detection =======================
 struct Detection {
-    cv::Rect_<float> rect; // x,y,w,h in 640x640 space
+    cv::Rect_<float> rect; // x,y,w,h in 640x640 model space
     float prob = 0.0f;
     int label = -1;
 };
 
+class IDetector {
+public:
+    virtual ~IDetector() = default;
+    virtual std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) = 0;
+};
+
+static constexpr int MODEL_W = 640;
+static constexpr int MODEL_H = 640;
+static constexpr int NUM_CLASSES = 5;
+static constexpr int BG_CLASS = NUM_CLASSES;
+
+const std::vector<std::string> CLASS_NAMES = {
+    "unknown_cone",
+    "yellow_cone",
+    "blue_cone",
+    "orange_cone",
+    "large_orange_cone"
+};
+
+static inline std::string className(int c) {
+    if (c == BG_CLASS) return "background";
+    if (c >= 0 && c < static_cast<int>(CLASS_NAMES.size())) return CLASS_NAMES[c];
+    return "class_" + std::to_string(c);
+}
+
+#ifdef USE_TENSORRT
+// ======================= TensorRT Logger =======================
 class Logger : public nvinfer1::ILogger {
 public:
     void log(Severity severity, const char* msg) noexcept override {
@@ -34,13 +67,13 @@ public:
     }
 };
 
-// ======================= YOLODetector =======================
-class YOLODetector {
+// ======================= TensorRT Detector =======================
+class TRTDetector : public IDetector {
 public:
-    explicit YOLODetector(const std::string& engine_file_path);
-    ~YOLODetector();
+    explicit TRTDetector(const std::string& engine_file_path);
+    ~TRTDetector() override;
 
-    std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold);
+    std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) override;
 
 private:
     void preprocessCudaToInputMem(const cv::Mat& img_bgr);
@@ -63,8 +96,6 @@ private:
     int last_input_width = 0;
     int last_input_height = 0;
 
-    static constexpr int MODEL_W = 640;
-    static constexpr int MODEL_H = 640;
     static constexpr int MAX_OUTPUT_DETECTIONS = 300;
     static constexpr int INPUT_SIZE_BYTES  = 1 * 3 * MODEL_H * MODEL_W * sizeof(float);
     static constexpr int OUTPUT_SIZE_BYTES = 1 * MAX_OUTPUT_DETECTIONS * 6 * sizeof(float);
@@ -73,11 +104,10 @@ private:
     const char* OUTPUT_BLOB_NAME = "output0";
 };
 
-YOLODetector::YOLODetector(const std::string& engine_file_path) {
+TRTDetector::TRTDetector(const std::string& engine_file_path) {
     std::ifstream file(engine_file_path, std::ios::binary);
     if (!file.good()) {
-        std::cerr << "[ERROR] Unable to open engine: " << engine_file_path << "\n";
-        std::exit(1);
+        throw std::runtime_error("[ERROR] Unable to open engine: " + engine_file_path);
     }
 
     file.seekg(0, file.end);
@@ -90,20 +120,17 @@ YOLODetector::YOLODetector(const std::string& engine_file_path) {
 
     runtime = createInferRuntime(logger);
     if (!runtime) {
-        std::cerr << "[ERROR] createInferRuntime failed\n";
-        std::exit(1);
+        throw std::runtime_error("[ERROR] createInferRuntime failed");
     }
 
     engine = runtime->deserializeCudaEngine(engineModelStream.data(), size);
     if (!engine) {
-        std::cerr << "[ERROR] deserializeCudaEngine failed\n";
-        std::exit(1);
+        throw std::runtime_error("[ERROR] deserializeCudaEngine failed");
     }
 
     context = engine->createExecutionContext();
     if (!context) {
-        std::cerr << "[ERROR] createExecutionContext failed\n";
-        std::exit(1);
+        throw std::runtime_error("[ERROR] createExecutionContext failed");
     }
 
     cudaMalloc(&input_mem, INPUT_SIZE_BYTES);
@@ -132,7 +159,7 @@ YOLODetector::YOLODetector(const std::string& engine_file_path) {
     output_tensor = nvcv::TensorWrapData(outTensorData);
 }
 
-YOLODetector::~YOLODetector() {
+TRTDetector::~TRTDetector() {
     if (input_mem) cudaFree(input_mem);
     if (output_mem) cudaFree(output_mem);
     if (input_img) cudaFree(input_img);
@@ -143,7 +170,7 @@ YOLODetector::~YOLODetector() {
     if (runtime) delete runtime;
 }
 
-void YOLODetector::preprocessCudaToInputMem(const cv::Mat& img_bgr) {
+void TRTDetector::preprocessCudaToInputMem(const cv::Mat& img_bgr) {
     nvtx3::scoped_range r{"preprocess_gpu"};
 
     cv::Mat host = img_bgr.isContinuous() ? img_bgr : img_bgr.clone();
@@ -158,8 +185,13 @@ void YOLODetector::preprocessCudaToInputMem(const cv::Mat& img_bgr) {
         cv::resize(host, host, cv::Size(), scale, scale, cv::INTER_LINEAR);
     }
 
-    cudaMemcpyAsync(input_img, host.data, host.total() * host.elemSize(),
-                    cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(
+        input_img,
+        host.data,
+        host.total() * host.elemSize(),
+        cudaMemcpyHostToDevice,
+        stream
+    );
 
     last_input_width  = host.cols;
     last_input_height = host.rows;
@@ -186,14 +218,14 @@ void YOLODetector::preprocessCudaToInputMem(const cv::Mat& img_bgr) {
         {MODEL_W, MODEL_H},
         NVCV_INTERP_LINEAR,
         {0, 0},
-        NVCV_CHANNEL_REVERSE,  // BGR -> RGB
+        NVCV_CHANNEL_REVERSE, // BGR -> RGB
         1.0f / 255.0f,
         0.0f,
         false
     );
 }
 
-std::vector<Detection> YOLODetector::detect(const cv::Mat& img_bgr, float conf_threshold) {
+std::vector<Detection> TRTDetector::detect(const cv::Mat& img_bgr, float conf_threshold) {
     preprocessCudaToInputMem(img_bgr);
 
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
@@ -228,6 +260,7 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img_bgr, float conf_t
         float w = x2 - x1;
         float h = y2 - y1;
         if (w <= 1.0f || h <= 1.0f) continue;
+        if (label < 0 || label >= NUM_CLASSES) continue;
 
         Detection d;
         d.rect  = cv::Rect_<float>(x1, y1, w, h);
@@ -238,26 +271,213 @@ std::vector<Detection> YOLODetector::detect(const cv::Mat& img_bgr, float conf_t
 
     return results;
 }
+#endif
 
-// ======================= Dataset helpers =======================
-static constexpr int NUM_CLASSES = 5;
-static constexpr int BG_CLASS = NUM_CLASSES;
+#ifdef USE_ONNX
+// ======================= ONNX Detector =======================
+class ONNXDetector : public IDetector {
+public:
+    explicit ONNXDetector(const std::string& onnx_file_path) {
+        net_ = cv::dnn::readNetFromONNX(onnx_file_path);
+        if (net_.empty()) {
+            throw std::runtime_error("[ERROR] Failed to load ONNX model: " + onnx_file_path);
+        }
 
-const std::vector<std::string> CLASS_NAMES = {
-    "unknown_cone",
-    "yellow_cone",
-    "blue_cone",
-    "orange_cone",
-    "large_orange_cone"
+        try {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+        } catch (...) {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        }
+    }
+
+    std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) override {
+        cv::Mat blob;
+        cv::dnn::blobFromImage(
+            img_bgr,
+            blob,
+            1.0 / 255.0,
+            cv::Size(MODEL_W, MODEL_H),
+            cv::Scalar(),
+            true,   // BGR -> RGB
+            false
+        );
+
+        net_.setInput(blob);
+
+        std::vector<cv::Mat> outs;
+        net_.forward(outs, net_.getUnconnectedOutLayersNames());
+        if (outs.empty()) return {};
+
+        cv::Mat det = normalizeOutput(outs[0]);
+
+        // Post-NMS output: [N,6] = x1,y1,x2,y2,conf,cls
+        if (det.cols == 6) {
+            std::vector<Detection> results;
+            results.reserve(det.rows);
+
+            for (int i = 0; i < det.rows; i++) {
+                const float* row = det.ptr<float>(i);
+                float x1   = row[0];
+                float y1   = row[1];
+                float x2   = row[2];
+                float y2   = row[3];
+                float conf = row[4];
+                int label  = static_cast<int>(row[5]);
+
+                if (conf < conf_threshold) continue;
+
+                float w = x2 - x1;
+                float h = y2 - y1;
+                if (w <= 1.0f || h <= 1.0f) continue;
+                if (label < 0 || label >= NUM_CLASSES) continue;
+
+                Detection d;
+                d.rect  = cv::Rect_<float>(x1, y1, w, h);
+                d.prob  = conf;
+                d.label = label;
+                results.push_back(d);
+            }
+
+            return results;
+        }
+
+        // Raw output cases:
+        // 1) [N, 5 + NUM_CLASSES] => cx,cy,w,h,obj,cls...
+        // 2) [N, 4 + NUM_CLASSES] => cx,cy,w,h,cls...
+        const bool has_objectness = (det.cols == 5 + NUM_CLASSES);
+        const bool no_objectness  = (det.cols == 4 + NUM_CLASSES);
+
+        if (!has_objectness && !no_objectness) {
+            throw std::runtime_error(
+                "[ERROR] Unexpected ONNX output shape. Expected Nx6, Nx" +
+                std::to_string(5 + NUM_CLASSES) + ", or Nx" +
+                std::to_string(4 + NUM_CLASSES) + ". Got Nx" +
+                std::to_string(det.cols)
+            );
+        }
+
+        std::vector<Detection> raw;
+        raw.reserve(det.rows);
+
+        for (int i = 0; i < det.rows; i++) {
+            const float* row = det.ptr<float>(i);
+
+            float cx = row[0];
+            float cy = row[1];
+            float w  = row[2];
+            float h  = row[3];
+
+            float obj = has_objectness ? row[4] : 1.0f;
+            int cls_start = has_objectness ? 5 : 4;
+
+            int best_cls = -1;
+            float best_cls_prob = 0.0f;
+            for (int c = 0; c < NUM_CLASSES; c++) {
+                float p = row[cls_start + c];
+                if (p > best_cls_prob) {
+                    best_cls_prob = p;
+                    best_cls = c;
+                }
+            }
+
+            float score = obj * best_cls_prob;
+            if (score < conf_threshold) continue;
+            if (best_cls < 0 || best_cls >= NUM_CLASSES) continue;
+            if (w <= 1.0f || h <= 1.0f) continue;
+
+            Detection d;
+            d.rect  = cv::Rect_<float>(cx - 0.5f * w, cy - 0.5f * h, w, h);
+            d.prob  = score;
+            d.label = best_cls;
+            raw.push_back(d);
+        }
+
+        return classWiseNMS(raw, conf_threshold, 0.45f);
+    }
+
+private:
+    cv::Mat normalizeOutput(const cv::Mat& out) const {
+        // Supports:
+        // [N, A]
+        // [1, N, A]
+        // [1, A, N] -> transpose to [N, A]
+        if (out.dims == 2) {
+            return out;
+        }
+
+        if (out.dims == 3 && out.size[0] == 1) {
+            const int d1 = out.size[1];
+            const int d2 = out.size[2];
+            float* data = reinterpret_cast<float*>(out.data);
+
+            if (d2 == 6 || d2 == 5 + NUM_CLASSES || d2 == 4 + NUM_CLASSES) {
+                return cv::Mat(d1, d2, CV_32F, data);
+            }
+
+            if (d1 == 6 || d1 == 5 + NUM_CLASSES || d1 == 4 + NUM_CLASSES) {
+                cv::Mat tmp(d1, d2, CV_32F, data);
+                cv::Mat transposed;
+                cv::transpose(tmp, transposed);
+                return transposed;
+            }
+        }
+
+        throw std::runtime_error("[ERROR] Unsupported ONNX output dims");
+    }
+
+    std::vector<Detection> classWiseNMS(
+        const std::vector<Detection>& dets,
+        float score_threshold,
+        float nms_threshold
+    ) const {
+        std::vector<Detection> final_dets;
+
+        for (int c = 0; c < NUM_CLASSES; c++) {
+            std::vector<cv::Rect> boxes;
+            std::vector<float> scores;
+            std::vector<Detection> cls_dets;
+
+            for (const auto& d : dets) {
+                if (d.label != c) continue;
+
+                boxes.emplace_back(
+                    static_cast<int>(std::round(d.rect.x)),
+                    static_cast<int>(std::round(d.rect.y)),
+                    static_cast<int>(std::round(d.rect.width)),
+                    static_cast<int>(std::round(d.rect.height))
+                );
+                scores.push_back(d.prob);
+                cls_dets.push_back(d);
+            }
+
+            std::vector<int> keep;
+            cv::dnn::NMSBoxes(boxes, scores, score_threshold, nms_threshold, keep);
+
+            for (int idx : keep) {
+                final_dets.push_back(cls_dets[idx]);
+            }
+        }
+
+        return final_dets;
+    }
+
+    cv::dnn::Net net_;
 };
+#endif
 
-static inline std::string className(int c) {
-    if (c == BG_CLASS) return "background";
-    if (c >= 0 && c < static_cast<int>(CLASS_NAMES.size())) return CLASS_NAMES[c];
-    return "class_" + std::to_string(c);
+static std::unique_ptr<IDetector> makeDetector(const std::string& model_path) {
+#ifdef USE_TENSORRT
+    return std::make_unique<TRTDetector>(model_path);
+#elif defined(USE_ONNX)
+    return std::make_unique<ONNXDetector>(model_path);
+#else
+#error "Must compile with either -DUSE_TENSORRT or -DUSE_ONNX"
+#endif
 }
 
-//look through the algo to see if it's accurate
+// ======================= Dataset helpers =======================
 float calculateIoU(const cv::Rect_<float>& a, const cv::Rect_<float>& b) {
     float x1 = std::max(a.x, b.x);
     float y1 = std::max(a.y, b.y);
@@ -328,12 +548,12 @@ struct APResult {
     int num_pred = 0;
 };
 
-//look through the algo to see if it's accurate
-APResult computeAPForClass(const std::vector<PredRecord>& all_preds,
-                           const std::vector<GTRecord>& all_gts,
-                           int target_cls,
-                           float iou_thresh)
-{
+APResult computeAPForClass(
+    const std::vector<PredRecord>& all_preds,
+    const std::vector<GTRecord>& all_gts,
+    int target_cls,
+    float iou_thresh
+) {
     std::vector<PredRecord> preds;
     std::vector<GTRecord> gts;
 
@@ -442,8 +662,7 @@ APResult computeAPForClass(const std::vector<PredRecord>& all_preds,
 }
 
 void reportMAP50(const std::vector<PredRecord>& all_preds,
-                 const std::vector<GTRecord>& all_gts)
-{
+                 const std::vector<GTRecord>& all_gts) {
     double sum_ap = 0.0;
     int valid_classes = 0;
 
@@ -468,8 +687,7 @@ void reportMAP50(const std::vector<PredRecord>& all_preds,
 }
 
 void reportMAP5095(const std::vector<PredRecord>& all_preds,
-                   const std::vector<GTRecord>& all_gts)
-{
+                   const std::vector<GTRecord>& all_gts) {
     std::vector<float> ious;
     for (int k = 0; k < 10; k++) ious.push_back(0.50f + 0.05f * k);
 
@@ -510,13 +728,13 @@ void reportMAP5095(const std::vector<PredRecord>& all_preds,
 // ======================= Confusion Matrix =======================
 using Confusion = std::vector<std::vector<long long>>;
 
-// Build confusion matrix at one IoU threshold.
 // Rows = GT, Cols = Pred, with extra background row/col.
-void accumulateConfusionForImage(std::vector<Detection> preds,
-                                 const std::vector<Detection>& gts,
-                                 float iou_th,
-                                 Confusion& confusion)
-{
+void accumulateConfusionForImage(
+    std::vector<Detection> preds,
+    const std::vector<Detection>& gts,
+    float iou_th,
+    Confusion& confusion
+) {
     std::sort(preds.begin(), preds.end(),
               [](const Detection& a, const Detection& b) {
                   return a.prob > b.prob;
@@ -583,7 +801,7 @@ void printConfusionMatrix(const Confusion& confusion) {
 
 // ======================= CLI =======================
 struct Args {
-    std::string engine_path;
+    std::string model_path;
     std::string path;  // image_path for bench, dataset_dir for val
     bool val_mode = false;
 
@@ -617,7 +835,7 @@ void runValidation(const Args& a) {
     std::string images_dir = a.path + "/images/test";
     std::string labels_dir = a.path + "/labels/test";
 
-    YOLODetector yolo(a.engine_path);
+    auto detector = makeDetector(a.model_path);
 
     std::vector<std::string> imgs = getFilesInDir(images_dir, ".jpg");
     auto pngs = getFilesInDir(images_dir, ".png");
@@ -651,7 +869,7 @@ void runValidation(const Args& a) {
         std::string label_path = labels_dir + "/" + base + ".txt";
 
         auto gts = parseYOLOLabels640(label_path);
-        auto preds = yolo.detect(img, a.map_conf);
+        auto preds = detector->detect(img, a.map_conf);
 
         for (const auto& g : gts) {
             if (g.label >= 0 && g.label < NUM_CLASSES) {
@@ -687,7 +905,8 @@ void runValidation(const Args& a) {
 
 // ======================= Benchmark =======================
 void runBench(const Args& a) {
-    YOLODetector yolo(a.engine_path);
+    auto detector = makeDetector(a.model_path);
+
     cv::Mat img = cv::imread(a.path);
     if (img.empty()) {
         std::cerr << "[ERROR] image empty: " << a.path << "\n";
@@ -696,14 +915,14 @@ void runBench(const Args& a) {
 
     std::cout << "[INFO] Warmup " << a.warmup << " runs...\n";
     for (int i = 0; i < a.warmup; i++) {
-        auto preds = yolo.detect(img, a.map_conf);
+        auto preds = detector->detect(img, a.map_conf);
         (void)preds;
     }
 
     std::cout << "[INFO] Benchmark " << a.iters << " runs...\n";
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < a.iters; i++) {
-        auto preds = yolo.detect(img, a.map_conf);
+        auto preds = detector->detect(img, a.map_conf);
         (void)preds;
     }
     auto end = std::chrono::high_resolution_clock::now();
@@ -721,16 +940,16 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         std::cerr
             << "[USAGE]\n"
-            << "  Bench: ./inference <engine_path> <image_path> "
+            << "  Bench: ./validation <model_path> <image_path> "
             << "[--map_conf 0.001] [--warmup 5] [--iters 20]\n"
-            << "  Val:   ./inference <engine_path> <dataset_dir> val "
+            << "  Val:   ./validation <model_path> <dataset_dir> val "
             << "[--map_conf 0.001] [--cm_iou 0.50] [--max_images N]\n"
             << "        dataset_dir must contain images/test and labels/test\n";
         return 1;
     }
 
     Args a;
-    a.engine_path = argv[1];
+    a.model_path = argv[1];
     a.path = argv[2];
     a.val_mode = (argc >= 4 && std::string(argv[3]) == "val");
 
@@ -740,8 +959,13 @@ int main(int argc, char** argv) {
     a.iters      = getOptInt(argc, argv, "--iters", a.iters);
     a.max_images = getOptInt(argc, argv, "--max_images", a.max_images);
 
-    if (a.val_mode) runValidation(a);
-    else runBench(a);
+    try {
+        if (a.val_mode) runValidation(a);
+        else runBench(a);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
 
     return 0;
 }

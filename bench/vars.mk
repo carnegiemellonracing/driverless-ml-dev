@@ -7,7 +7,7 @@ INFER_BIN := yolo-inference/build/inference
 VAL_BIN   := yolo-inference/build/validation
 
 # Validation thresholds
-MAP_CONF  := 0.5
+MAP_CONF  := 0.001
 CM_IOU   := 0.5
 VAL_MAX   := -1
 

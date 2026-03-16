@@ -3,10 +3,16 @@
 #include <vector>
 #include <string>
 #include <chrono>
-#include <unordered_map>
+#include <memory>
+#include <stdexcept>
+#include <cmath>
+#include <algorithm>
 
-#include <cuda_runtime.h>
 #include <opencv2/opencv.hpp>
+#include <opencv2/dnn.hpp>
+
+#ifdef USE_TENSORRT
+#include <cuda_runtime.h>
 #include <NvInfer.h>
 #include <nvtx3/nvtx3.hpp>
 
@@ -14,598 +20,546 @@
 #include <nvcv/Tensor.hpp>
 
 using namespace nvinfer1;
+#endif
 
-struct Detection
-{
-    cv::Rect_<float> rect;
-    float prob;
-    int label;
+// ======================= Common =======================
+struct Detection {
+    cv::Rect_<float> rect; // x,y,w,h in 640x640 model space
+    float prob = 0.0f;
+    int label = -1;
 };
 
+class IDetector {
+public:
+    virtual ~IDetector() = default;
+    virtual std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) = 0;
+};
+
+static constexpr int MODEL_W = 640;
+static constexpr int MODEL_H = 640;
+static constexpr int NUM_CLASSES = 5;
+
+#ifdef USE_TENSORRT
+// ======================= TensorRT Logger =======================
 class Logger : public nvinfer1::ILogger {
 public:
     void log(Severity severity, const char* msg) noexcept override {
-        if (severity <= Severity::kVERBOSE) {
+        if (severity <= Severity::kWARNING) {
             std::cout << msg << "\n";
         }
     }
-} gLogger;
-
-class YOLODetector {
-public:
-    YOLODetector(std::string engine_file_path);
-    ~YOLODetector();
-    std::vector<Detection> detect (const cv::Mat& img, float conf);
-
-private:
-    std::vector<float> preprocess(const cv::Mat& img);
-    void preprocessCuda(const cv::Mat& img);
-
-    Logger logger;
-    ICudaEngine* engine;
-    IRuntime* runtime;
-    IExecutionContext* context;
-    cudaStream_t stream = nullptr;
-
-    std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op;
-
-    nvcv::Tensor input_tensor;
-    nvcv::Tensor output_tensor;
-
-    void* input_img = nullptr;
-
-    void* input_mem = nullptr;
-    void* output_mem = nullptr;
-
-    // Track input dimensions to detect changes
-    int last_input_width = 0;
-    int last_input_height = 0;
-
-    static const int INPUT_SIZE = 1 * 3 * 640 * 640 * sizeof(float);
-    static const int OUTPUT_SIZE = 1 * 300 * 6 * sizeof(float);
-    static const int MAX_OUTPUT_DETECTIONS = 300;
-    const char* INPUT_BLOB_NAME = "images";
-    const char* OUTPUT_BLOB_NAME = "output0";
 };
 
-YOLODetector::YOLODetector(std::string engine_file_path) {
+// ======================= TensorRT Detector =======================
+class TRTDetector : public IDetector {
+public:
+    explicit TRTDetector(const std::string& engine_file_path);
+    ~TRTDetector() override;
 
+    std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) override;
+
+private:
+    void preprocessCudaToInputMem(const cv::Mat& img_bgr);
+
+    Logger logger_;
+    IRuntime* runtime_ = nullptr;
+    ICudaEngine* engine_ = nullptr;
+    IExecutionContext* context_ = nullptr;
+    cudaStream_t stream_ = nullptr;
+
+    std::unique_ptr<cvcuda::ResizeCropConvertReformat> preprocess_op_;
+
+    nvcv::Tensor input_tensor_;
+    nvcv::Tensor output_tensor_;
+
+    void* input_img_ = nullptr;
+    void* input_mem_ = nullptr;
+    void* output_mem_ = nullptr;
+
+    int last_input_width_ = 0;
+    int last_input_height_ = 0;
+
+    static constexpr int MAX_OUTPUT_DETECTIONS = 300;
+    static constexpr int INPUT_SIZE_BYTES  = 1 * 3 * MODEL_H * MODEL_W * sizeof(float);
+    static constexpr int OUTPUT_SIZE_BYTES = 1 * MAX_OUTPUT_DETECTIONS * 6 * sizeof(float);
+
+    const char* INPUT_BLOB_NAME_  = "images";
+    const char* OUTPUT_BLOB_NAME_ = "output0";
+};
+
+TRTDetector::TRTDetector(const std::string& engine_file_path) {
     std::ifstream file(engine_file_path, std::ios::binary);
     if (!file.good()) {
-        std::cerr << "[ERROR]: Unable to open file: " << engine_file_path << std::endl;
-        exit(1);
+        throw std::runtime_error("[ERROR] Unable to open engine: " + engine_file_path);
     }
-
-    size_t size;
 
     file.seekg(0, file.end);
-    size = file.tellg();
+    const size_t size = static_cast<size_t>(file.tellg());
     file.seekg(0, file.beg);
 
-    std::vector<char> engineModelStream(size);
-    file.read(engineModelStream.data(), size);
+    std::vector<char> engine_model_stream(size);
+    file.read(engine_model_stream.data(), size);
     file.close();
 
-    runtime = createInferRuntime(logger);
-    engine = runtime->deserializeCudaEngine(engineModelStream.data(), size);
-    context = engine->createExecutionContext();
+    runtime_ = createInferRuntime(logger_);
+    if (!runtime_) {
+        throw std::runtime_error("[ERROR] createInferRuntime failed");
+    }
 
-    cudaMalloc(&input_mem, INPUT_SIZE);
-    cudaMalloc(&output_mem, OUTPUT_SIZE);
+    engine_ = runtime_->deserializeCudaEngine(engine_model_stream.data(), size);
+    if (!engine_) {
+        throw std::runtime_error("[ERROR] deserializeCudaEngine failed");
+    }
 
-    cudaStreamCreate(&stream);
+    context_ = engine_->createExecutionContext();
+    if (!context_) {
+        throw std::runtime_error("[ERROR] createExecutionContext failed");
+    }
 
-    preprocess_op = std::make_unique<cvcuda::ResizeCropConvertReformat>();
+    cudaMalloc(&input_mem_, INPUT_SIZE_BYTES);
+    cudaMalloc(&output_mem_, OUTPUT_SIZE_BYTES);
+    cudaStreamCreate(&stream_);
 
-    const int MAX_INPUT_WIDTH = 1920;
+    preprocess_op_ = std::make_unique<cvcuda::ResizeCropConvertReformat>();
+
+    const int MAX_INPUT_WIDTH  = 1920;
     const int MAX_INPUT_HEIGHT = 1080;
-    cudaMalloc(&input_img, MAX_INPUT_WIDTH * MAX_INPUT_HEIGHT * 3);
+    cudaMalloc(&input_img_, MAX_INPUT_WIDTH * MAX_INPUT_HEIGHT * 3);
 
-    /* Wrap TensorRT's 'input_mem' as CV-CUDA output tensor */
-    nvcv::TensorShape outputShape{{1, 3, 640, 640}, NVCV_TENSOR_NCHW};
+    nvcv::TensorShape out_shape{{1, 3, MODEL_H, MODEL_W}, NVCV_TENSOR_NCHW};
+    nvcv::TensorDataStridedCuda::Buffer out_buffer;
+    out_buffer.basePtr = static_cast<NVCVByte*>(input_mem_);
+    out_buffer.strides[0] = 3 * MODEL_H * MODEL_W * sizeof(float);
+    out_buffer.strides[1] = MODEL_H * MODEL_W * sizeof(float);
+    out_buffer.strides[2] = MODEL_W * sizeof(float);
+    out_buffer.strides[3] = sizeof(float);
 
-    nvcv::TensorDataStridedCuda::Buffer outBuffer;
-    outBuffer.basePtr = static_cast<NVCVByte*>(input_mem);
-    outBuffer.strides[0] = 3 * 640 * 640 * sizeof(float);
-    outBuffer.strides[1] = 640 * 640 * sizeof(float);
-    outBuffer.strides[2] = 640 * sizeof(float);
-    outBuffer.strides[3] = sizeof(float);
-
-    nvcv::TensorDataStridedCuda outTensorData(
-        outputShape,
+    nvcv::TensorDataStridedCuda out_tensor_data(
+        out_shape,
         nvcv::DataType{NVCV_DATA_TYPE_F32},
-        outBuffer
+        out_buffer
     );
-
-    output_tensor = nvcv::TensorWrapData(outTensorData);
+    output_tensor_ = nvcv::TensorWrapData(out_tensor_data);
 }
 
-YOLODetector::~YOLODetector() {
-    cudaFree(input_mem);
-    cudaFree(output_mem);
-    cudaFree(input_img);
+TRTDetector::~TRTDetector() {
+    if (input_mem_) cudaFree(input_mem_);
+    if (output_mem_) cudaFree(output_mem_);
+    if (input_img_) cudaFree(input_img_);
+    if (stream_) cudaStreamDestroy(stream_);
 
-    cudaStreamDestroy(stream);
-
-    delete context;
-    delete engine;
-    delete runtime;
+    if (context_) delete context_;
+    if (engine_) delete engine_;
+    if (runtime_) delete runtime_;
 }
 
-std::vector<float> YOLODetector::preprocess(const cv::Mat& img) {
-
-    cv::Mat resized;
-    {
-        nvtx3::scoped_range r{"resize"};
-        cv::resize(img, resized, cv::Size(640, 640));
-    }
-
-    {
-        nvtx3::scoped_range r{"colorTransform"};
-        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
-    }
-
-    {
-        nvtx3::scoped_range r{"fpConvert"};
-        resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
-    }
-    
-    nvtx3::scoped_range r{"HWC->CHW"};
-    std::vector<float> result(3 * 640 * 640);
-    float* data = result.data();
-
-    const float* ptr = (float*)resized.data;
-    const int num_pixels = 640*640;
-
-    for (int i = 0; i < num_pixels; ++i) {
-        int offset = i * 3;
-
-        data[i] = ptr[offset];
-        data[num_pixels + i] = ptr[offset + 1];
-        data[2 * num_pixels + i] = ptr[offset + 2];
-    }
-
-    return result;
-}
-
-void YOLODetector::preprocessCuda(const cv::Mat& img) {
+void TRTDetector::preprocessCudaToInputMem(const cv::Mat& img_bgr) {
     nvtx3::scoped_range r{"preprocess_gpu"};
 
-    {
-        nvtx3::scoped_range r2{"H2D_image"};
-        
-        // Bounds check - resize if image exceeds max buffer size
-        const int MAX_INPUT_WIDTH = 1920;
-        const int MAX_INPUT_HEIGHT = 1080;
-        cv::Mat host = img.isContinuous() ? img : img.clone();
-        
-        if (host.cols > MAX_INPUT_WIDTH || host.rows > MAX_INPUT_HEIGHT) {
-            // Calculate scale to fit within bounds while maintaining aspect ratio
-            float scale = std::min(
-                static_cast<float>(MAX_INPUT_WIDTH) / host.cols,
-                static_cast<float>(MAX_INPUT_HEIGHT) / host.rows
-            );
-            cv::resize(host, host, cv::Size(), scale, scale, cv::INTER_LINEAR);
-        }
-        
-        cudaMemcpyAsync(input_img, host.data, 
-                       host.total() * host.elemSize(), 
-                       cudaMemcpyHostToDevice, stream);
-        
-        // Update dimensions after potential resize
-        last_input_width = host.cols;
-        last_input_height = host.rows;
-    }
+    cv::Mat host = img_bgr.isContinuous() ? img_bgr : img_bgr.clone();
 
-    {
-        nvtx3::scoped_range r2{"create_input_tensor"};
-        
-        // Use tracked dimensions (which account for any resize that occurred)
-        nvcv::TensorShape inShape{{1, last_input_height, last_input_width, 3}, "NHWC"};
-        
-        nvcv::TensorDataStridedCuda::Buffer inBuffer;
-        inBuffer.basePtr = static_cast<NVCVByte*>(input_img);
-        inBuffer.strides[0] = last_input_height * last_input_width * 3;
-        inBuffer.strides[1] = last_input_width * 3;
-        inBuffer.strides[2] = 3;
-        inBuffer.strides[3] = 1;
-        
-        nvcv::TensorDataStridedCuda inTensorData(
-            inShape,
-            nvcv::DataType{NVCV_DATA_TYPE_U8},
-            inBuffer
+    const int MAX_INPUT_WIDTH  = 1920;
+    const int MAX_INPUT_HEIGHT = 1080;
+    if (host.cols > MAX_INPUT_WIDTH || host.rows > MAX_INPUT_HEIGHT) {
+        float scale = std::min(
+            static_cast<float>(MAX_INPUT_WIDTH) / host.cols,
+            static_cast<float>(MAX_INPUT_HEIGHT) / host.rows
         );
-        
-        input_tensor = nvcv::TensorWrapData(inTensorData);
+        cv::resize(host, host, cv::Size(), scale, scale, cv::INTER_LINEAR);
     }
 
-    {
-        nvtx3::scoped_range r2{"fused_preprocess_kernel"};
+    cudaMemcpyAsync(
+        input_img_,
+        host.data,
+        host.total() * host.elemSize(),
+        cudaMemcpyHostToDevice,
+        stream_
+    );
 
-        (*preprocess_op)(
-            stream,
-            input_tensor,
-            output_tensor,
-            {640, 640},
-            NVCV_INTERP_LINEAR,
-            {0, 0},
-            NVCV_CHANNEL_REVERSE,
-            1.0f / 255.0f,
-            0.0f,
-            false
-        );
-    }
+    last_input_width_ = host.cols;
+    last_input_height_ = host.rows;
 
-    // Synchronize to ensure preprocessing is complete before inference
-    cudaStreamSynchronize(stream);
+    nvcv::TensorShape in_shape{{1, last_input_height_, last_input_width_, 3}, "NHWC"};
+    nvcv::TensorDataStridedCuda::Buffer in_buffer;
+    in_buffer.basePtr = static_cast<NVCVByte*>(input_img_);
+    in_buffer.strides[0] = last_input_height_ * last_input_width_ * 3;
+    in_buffer.strides[1] = last_input_width_ * 3;
+    in_buffer.strides[2] = 3;
+    in_buffer.strides[3] = 1;
+
+    nvcv::TensorDataStridedCuda in_tensor_data(
+        in_shape,
+        nvcv::DataType{NVCV_DATA_TYPE_U8},
+        in_buffer
+    );
+    input_tensor_ = nvcv::TensorWrapData(in_tensor_data);
+
+    (*preprocess_op_)(
+        stream_,
+        input_tensor_,
+        output_tensor_,
+        {MODEL_W, MODEL_H},
+        NVCV_INTERP_LINEAR,
+        {0, 0},
+        NVCV_CHANNEL_REVERSE, // BGR -> RGB
+        1.0f / 255.0f,
+        0.0f,
+        false
+    );
 }
 
-std::vector<Detection> YOLODetector::detect(const cv::Mat& img, float threshold) {
-    
-    /*
-    std::vector<float> input;
-    {
-        nvtx3::scoped_range r{"preprocess"};
-        input = preprocess(img); 
-    }
-    */
-
-    preprocessCuda(img);
+std::vector<Detection> TRTDetector::detect(const cv::Mat& img_bgr, float conf_threshold) {
+    preprocessCudaToInputMem(img_bgr);
 
     std::vector<float> output(MAX_OUTPUT_DETECTIONS * 6);
-    
-    /*
-    {
-        nvtx3::scoped_range r{"H2D_memcpy"};
-        cudaMemcpyAsync(input_mem, input.data(), INPUT_SIZE, cudaMemcpyHostToDevice, stream);
-    }
-    */
 
     {
         nvtx3::scoped_range r{"inference"};
-        context->setTensorAddress(INPUT_BLOB_NAME, input_mem);
-        context->setTensorAddress(OUTPUT_BLOB_NAME, output_mem);
-        context->enqueueV3(stream);
-    }
-
-    {   
-        nvtx3::scoped_range r{"D2H_memcpy"};
-        cudaMemcpyAsync(output.data(), output_mem, OUTPUT_SIZE, cudaMemcpyDeviceToHost, stream);
+        context_->setTensorAddress(INPUT_BLOB_NAME_, input_mem_);
+        context_->setTensorAddress(OUTPUT_BLOB_NAME_, output_mem_);
+        context_->enqueueV3(stream_);
     }
 
     {
-        nvtx3::scoped_range r{"sync"};
-        cudaStreamSynchronize(stream);
+        nvtx3::scoped_range r{"D2H"};
+        cudaMemcpyAsync(
+            output.data(),
+            output_mem_,
+            OUTPUT_SIZE_BYTES,
+            cudaMemcpyDeviceToHost,
+            stream_
+        );
+        cudaStreamSynchronize(stream_);
     }
-    
-    nvtx3::scoped_range r{"postprocess"};
+
     std::vector<Detection> results;
+    results.reserve(64);
 
     for (int i = 0; i < MAX_OUTPUT_DETECTIONS; i++) {
-        
-        int offset = i * 6;
+        int off = i * 6;
 
-        float conf = output[offset+4];
+        float x1   = output[off + 0];
+        float y1   = output[off + 1];
+        float x2   = output[off + 2];
+        float y2   = output[off + 3];
+        float conf = output[off + 4];
+        int label  = static_cast<int>(output[off + 5]);
 
-        if (conf < threshold) continue;
-        
-        // YOLO/TensorRT outputs boxes as (x1, y1, x2, y2) corner coordinates
-        float x1 = output[offset+0];
-        float y1 = output[offset+1];
-        float x2 = output[offset+2];
-        float y2 = output[offset+3];
-        
-        // Convert to (x, y, w, h) format for cv::Rect
-        float x = x1;
-        float y = y1;
+        if (conf < conf_threshold) continue;
+
         float w = x2 - x1;
         float h = y2 - y1;
+        if (w <= 1.0f || h <= 1.0f) continue;
+        if (label < 0 || label >= NUM_CLASSES) continue;
 
-        int label = (int)output[offset+5];
-
-        Detection det;
-        det.rect = cv::Rect_<float>(x, y, w, h);
-        det.prob = conf;
-        det.label = label;
-
-        results.push_back(det);
+        Detection d;
+        d.rect = cv::Rect_<float>(x1, y1, w, h);
+        d.prob = conf;
+        d.label = label;
+        results.push_back(d);
     }
 
     return results;
 }
+#endif
 
-// ============= VALIDATION CODE =============
+#ifdef USE_ONNX
+// ======================= ONNX Detector =======================
+class ONNXDetector : public IDetector {
+public:
+    explicit ONNXDetector(const std::string& onnx_file_path) {
+        net_ = cv::dnn::readNetFromONNX(onnx_file_path);
+        if (net_.empty()) {
+            throw std::runtime_error("[ERROR] Failed to load ONNX model: " + onnx_file_path);
+        }
 
-// Calculate IoU between two bounding boxes
-float calculateIoU(const cv::Rect_<float>& a, const cv::Rect_<float>& b) {
-    float x1 = std::max(a.x, b.x);
-    float y1 = std::max(a.y, b.y);
-    float x2 = std::min(a.x + a.width, b.x + b.width);
-    float y2 = std::min(a.y + a.height, b.y + b.height);
-    
-    float intersection = std::max(0.0f, x2 - x1) * std::max(0.0f, y2 - y1);
-    float areaA = a.width * a.height;
-    float areaB = b.width * b.height;
-    float unionArea = areaA + areaB - intersection;
-    
-    return (unionArea > 0) ? (intersection / unionArea) : 0.0f;
-}
-
-// Parse YOLO format label file: class x_center y_center width height (normalized)
-// Note: We use MODEL_INPUT_SIZE (640) because model predictions are in 640x640 space
-std::vector<Detection> parseYOLOLabels(const std::string& label_path, int /*img_width*/, int /*img_height*/) {
-    const int MODEL_INPUT_SIZE = 640;  // Model input resolution
-    
-    std::vector<Detection> gt;
-    std::ifstream file(label_path);
-    if (!file.is_open()) return gt;
-    
-    int cls;
-    float x_center, y_center, w, h;
-    while (file >> cls >> x_center >> y_center >> w >> h) {
-        Detection d;
-        // Convert normalized coords to 640x640 model input space
-        float abs_w = w * MODEL_INPUT_SIZE;
-        float abs_h = h * MODEL_INPUT_SIZE;
-        float abs_x = x_center * MODEL_INPUT_SIZE - abs_w / 2.0f;
-        float abs_y = y_center * MODEL_INPUT_SIZE - abs_h / 2.0f;
-        d.rect = cv::Rect_<float>(abs_x, abs_y, abs_w, abs_h);
-        d.label = cls;
-        d.prob = 1.0f; // ground truth
-        gt.push_back(d);
+        try {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+        } catch (...) {
+            net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        }
     }
-    return gt;
-}
 
-// Get list of files in a directory with a specific extension
-std::vector<std::string> getFilesInDir(const std::string& dir, const std::string& ext) {
-    std::vector<std::string> files;
-    cv::glob(dir + "/*" + ext, files, false);
-    return files;
-}
+    std::vector<Detection> detect(const cv::Mat& img_bgr, float conf_threshold) override {
+        cv::Mat blob;
+        cv::dnn::blobFromImage(
+            img_bgr,
+            blob,
+            1.0 / 255.0,
+            cv::Size(MODEL_W, MODEL_H),
+            cv::Scalar(),
+            true,   // BGR -> RGB
+            false
+        );
 
-// Extract base filename without extension
-std::string getBaseName(const std::string& path) {
-    size_t lastSlash = path.find_last_of("/\\");
-    size_t lastDot = path.find_last_of(".");
-    if (lastSlash == std::string::npos) lastSlash = 0;
-    else lastSlash++;
-    if (lastDot == std::string::npos || lastDot < lastSlash) lastDot = path.length();
-    return path.substr(lastSlash, lastDot - lastSlash);
-}
+        net_.setInput(blob);
 
-struct ValidationMetrics {
-    int total_gt = 0;       // Total ground truth objects
-    int total_pred = 0;     // Total predictions
-    int true_positives = 0; // Correct detections
-    
-    float precision() const { return total_pred > 0 ? (float)true_positives / total_pred : 0.0f; }
-    float recall() const { return total_gt > 0 ? (float)true_positives / total_gt : 0.0f; }
-    float f1() const { 
-        float p = precision(), r = recall();
-        return (p + r > 0) ? (2.0f * p * r) / (p + r) : 0.0f;
-    }
-};
+        std::vector<cv::Mat> outs;
+        net_.forward(outs, net_.getUnconnectedOutLayersNames());
+        if (outs.empty()) return {};
 
-// Evaluate detections against ground truth for a single image
-void evaluateImage(const std::vector<Detection>& preds, 
-                   const std::vector<Detection>& gts,
-                   float iou_threshold,
-                   ValidationMetrics& metrics) {
-    
-    metrics.total_gt += gts.size();
-    metrics.total_pred += preds.size();
-    
-    std::vector<bool> gt_matched(gts.size(), false);
-    
-    // For each prediction, find best matching GT (same class, highest IoU)
-    for (const auto& pred : preds) {
-        float best_iou = 0.0f;
-        int best_idx = -1;
-        
-        for (size_t i = 0; i < gts.size(); i++) {
-            if (gt_matched[i]) continue;  // Already matched
-            if (gts[i].label != pred.label) continue;  // Different class
-            
-            float iou = calculateIoU(pred.rect, gts[i].rect);
-            if (iou > best_iou && iou >= iou_threshold) {
-                best_iou = iou;
-                best_idx = i;
+        cv::Mat det = normalizeOutput(outs[0]);
+
+        // Already post-NMS: [N,6] = x1,y1,x2,y2,conf,cls
+        if (det.cols == 6) {
+            std::vector<Detection> results;
+            results.reserve(det.rows);
+
+            for (int i = 0; i < det.rows; i++) {
+                const float* row = det.ptr<float>(i);
+
+                float x1   = row[0];
+                float y1   = row[1];
+                float x2   = row[2];
+                float y2   = row[3];
+                float conf = row[4];
+                int label  = static_cast<int>(row[5]);
+
+                if (conf < conf_threshold) continue;
+
+                float w = x2 - x1;
+                float h = y2 - y1;
+                if (w <= 1.0f || h <= 1.0f) continue;
+                if (label < 0 || label >= NUM_CLASSES) continue;
+
+                Detection d;
+                d.rect = cv::Rect_<float>(x1, y1, w, h);
+                d.prob = conf;
+                d.label = label;
+                results.push_back(d);
             }
-        }
-        
-        if (best_idx >= 0) {
-            gt_matched[best_idx] = true;
-            metrics.true_positives++;
-        }
-    }
-}
 
-// FSOCO cone class names
-const std::vector<std::string> CLASS_NAMES = {
-    "unknown_cone",
-    "yellow_cone",
-    "blue_cone",
-    "orange_cone",
-    "large_orange_cone"
-};
-
-std::string getClassName(int label) {
-    if (label >= 0 && label < (int)CLASS_NAMES.size()) {
-        return CLASS_NAMES[label];
-    }
-    return "class_" + std::to_string(label);
-}
-
-void runValidation(const std::string& engine_path, 
-                   const std::string& dataset_dir,
-                   float conf_threshold = 0.5f,
-                   float iou_threshold = 0.5f) {
-    
-    // FSOCO structure: dataset_dir/images/test/ and dataset_dir/labels/test/
-    std::string images_dir = dataset_dir + "/images/test";
-    std::string labels_dir = dataset_dir + "/labels/test";
-    
-    YOLODetector yolo(engine_path);
-    
-    std::vector<std::string> image_files = getFilesInDir(images_dir, ".jpg");
-    std::vector<std::string> png_files = getFilesInDir(images_dir, ".png");
-    image_files.insert(image_files.end(), png_files.begin(), png_files.end());
-    
-    if (image_files.empty()) {
-        std::cerr << "[ERROR] No images found in: " << images_dir << std::endl;
-        return;
-    }
-    
-    ValidationMetrics overall;
-    std::unordered_map<int, ValidationMetrics> per_class;
-    
-    std::cout << "[INFO] Images dir: " << images_dir << std::endl;
-    std::cout << "[INFO] Labels dir: " << labels_dir << std::endl;
-    std::cout << "[INFO] Validating on " << image_files.size() << " images..." << std::endl;
-    
-    int images_processed = 0;
-    for (const auto& img_path : image_files) {
-        cv::Mat img = cv::imread(img_path);
-        if (img.empty()) {
-            std::cerr << "[WARN] Could not read: " << img_path << std::endl;
-            continue;
+            return results;
         }
-        
-        // Find corresponding label file
-        std::string base = getBaseName(img_path);
-        std::string label_path = labels_dir + "/" + base + ".txt";
-        
-        std::vector<Detection> gt = parseYOLOLabels(label_path, img.cols, img.rows);
-        std::vector<Detection> preds = yolo.detect(img, conf_threshold);
-        
-        // Evaluate this image - need a copy for per-class TP tracking
-        std::vector<bool> gt_matched(gt.size(), false);
-        
-        overall.total_gt += gt.size();
-        overall.total_pred += preds.size();
-        
-        for (const auto& pred : preds) {
-            float best_iou = 0.0f;
-            int best_idx = -1;
-            
-            for (size_t i = 0; i < gt.size(); i++) {
-                if (gt_matched[i]) continue;
-                if (gt[i].label != pred.label) continue;
-                
-                float iou = calculateIoU(pred.rect, gt[i].rect);
-                if (iou > best_iou && iou >= iou_threshold) {
-                    best_iou = iou;
-                    best_idx = i;
+
+        // Raw YOLO output:
+        //   Nx(5+C): cx,cy,w,h,obj,cls...
+        //   Nx(4+C): cx,cy,w,h,cls...
+        const bool has_objectness = (det.cols == 5 + NUM_CLASSES);
+        const bool no_objectness  = (det.cols == 4 + NUM_CLASSES);
+
+        if (!has_objectness && !no_objectness) {
+            throw std::runtime_error(
+                "[ERROR] Unexpected ONNX output shape. Expected Nx6, Nx" +
+                std::to_string(5 + NUM_CLASSES) + ", or Nx" +
+                std::to_string(4 + NUM_CLASSES) + ". Got Nx" +
+                std::to_string(det.cols)
+            );
+        }
+
+        std::vector<Detection> raw;
+        raw.reserve(det.rows);
+
+        for (int i = 0; i < det.rows; i++) {
+            const float* row = det.ptr<float>(i);
+
+            float cx = row[0];
+            float cy = row[1];
+            float w  = row[2];
+            float h  = row[3];
+
+            float obj = has_objectness ? row[4] : 1.0f;
+            int cls_start = has_objectness ? 5 : 4;
+
+            int best_cls = -1;
+            float best_cls_prob = 0.0f;
+            for (int c = 0; c < NUM_CLASSES; c++) {
+                float p = row[cls_start + c];
+                if (p > best_cls_prob) {
+                    best_cls_prob = p;
+                    best_cls = c;
                 }
             }
-            
-            if (best_idx >= 0) {
-                gt_matched[best_idx] = true;
-                overall.true_positives++;
-                per_class[pred.label].true_positives++;
+
+            float score = obj * best_cls_prob;
+            if (score < conf_threshold) continue;
+            if (best_cls < 0 || best_cls >= NUM_CLASSES) continue;
+            if (w <= 1.0f || h <= 1.0f) continue;
+
+            Detection d;
+            d.rect = cv::Rect_<float>(cx - 0.5f * w, cy - 0.5f * h, w, h);
+            d.prob = score;
+            d.label = best_cls;
+            raw.push_back(d);
+        }
+
+        return classWiseNMS(raw, conf_threshold, 0.45f);
+    }
+
+private:
+    cv::Mat normalizeOutput(const cv::Mat& out) const {
+        // Supports:
+        // [N, A]
+        // [1, N, A]
+        // [1, A, N] -> transpose to [N, A]
+        if (out.dims == 2) {
+            return out;
+        }
+
+        if (out.dims == 3 && out.size[0] == 1) {
+            const int d1 = out.size[1];
+            const int d2 = out.size[2];
+            float* data = reinterpret_cast<float*>(out.data);
+
+            if (d2 == 6 || d2 == 5 + NUM_CLASSES || d2 == 4 + NUM_CLASSES) {
+                return cv::Mat(d1, d2, CV_32F, data);
+            }
+
+            if (d1 == 6 || d1 == 5 + NUM_CLASSES || d1 == 4 + NUM_CLASSES) {
+                cv::Mat tmp(d1, d2, CV_32F, data);
+                cv::Mat transposed;
+                cv::transpose(tmp, transposed);
+                return transposed;
             }
         }
-        
-        // Per-class ground truth and prediction counts
-        for (const auto& g : gt) {
-            per_class[g.label].total_gt++;
-        }
-        for (const auto& p : preds) {
-            per_class[p.label].total_pred++;
-        }
-        
-        images_processed++;
-        if (images_processed % 100 == 0) {
-            std::cout << "[INFO] Processed " << images_processed << "/" << image_files.size() << " images..." << std::endl;
-        }
+
+        throw std::runtime_error("[ERROR] Unsupported ONNX output dims");
     }
-    
-    // Print results
-    std::cout << "\n========== VALIDATION RESULTS ==========" << std::endl;
-    std::cout << "Dataset:        " << dataset_dir << std::endl;
-    std::cout << "Images:         " << images_processed << std::endl;
-    std::cout << "IoU Threshold:  " << iou_threshold << std::endl;
-    std::cout << "Conf Threshold: " << conf_threshold << std::endl;
-    std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Total Ground Truth: " << overall.total_gt << std::endl;
-    std::cout << "Total Predictions:  " << overall.total_pred << std::endl;
-    std::cout << "True Positives:     " << overall.true_positives << std::endl;
-    std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Precision: " << (overall.precision() * 100.0f) << "%" << std::endl;
-    std::cout << "Recall:    " << (overall.recall() * 100.0f) << "%" << std::endl;
-    std::cout << "F1 Score:  " << (overall.f1() * 100.0f) << "%" << std::endl;
-    
-    // Print per-class metrics
-    std::cout << "\n------------ Per-Class Metrics ----------" << std::endl;
-    for (const auto& kv : per_class) {
-        std::string name = getClassName(kv.first);
-        const ValidationMetrics& m = kv.second;
-        std::cout << name << " (class " << kv.first << "):" << std::endl;
-        std::cout << "  GT: " << m.total_gt 
-                  << " | Pred: " << m.total_pred 
-                  << " | TP: " << m.true_positives 
-                  << " | P: " << (m.precision() * 100.0f) << "%" 
-                  << " | R: " << (m.recall() * 100.0f) << "%" << std::endl;
+
+    std::vector<Detection> classWiseNMS(
+        const std::vector<Detection>& dets,
+        float score_threshold,
+        float nms_threshold
+    ) const {
+        std::vector<Detection> final_dets;
+
+        for (int c = 0; c < NUM_CLASSES; c++) {
+            std::vector<cv::Rect> boxes;
+            std::vector<float> scores;
+            std::vector<Detection> class_dets;
+
+            for (const auto& d : dets) {
+                if (d.label != c) continue;
+
+                boxes.emplace_back(
+                    static_cast<int>(std::round(d.rect.x)),
+                    static_cast<int>(std::round(d.rect.y)),
+                    static_cast<int>(std::round(d.rect.width)),
+                    static_cast<int>(std::round(d.rect.height))
+                );
+                scores.push_back(d.prob);
+                class_dets.push_back(d);
+            }
+
+            std::vector<int> keep;
+            cv::dnn::NMSBoxes(boxes, scores, score_threshold, nms_threshold, keep);
+
+            for (int idx : keep) {
+                final_dets.push_back(class_dets[idx]);
+            }
+        }
+
+        return final_dets;
     }
-    std::cout << "=========================================\n" << std::endl;
+
+    cv::dnn::Net net_;
+};
+#endif
+
+static std::unique_ptr<IDetector> makeDetector(const std::string& model_path) {
+#ifdef USE_TENSORRT
+    return std::make_unique<TRTDetector>(model_path);
+#elif defined(USE_ONNX)
+    return std::make_unique<ONNXDetector>(model_path);
+#else
+#error "Must compile with either -DUSE_TENSORRT or -DUSE_ONNX"
+#endif
 }
 
+// ======================= CLI =======================
+struct Args {
+    std::string model_path;
+    std::string image_path;
 
-int main(int argc, char **argv) {
-    if (argc < 3) {
-        std::cerr << "[USAGE]:" << std::endl;
-        std::cerr << "  Benchmark: ./inference <engine_path> <image_path>" << std::endl;
-        std::cerr << "  Validate:  ./inference <engine_path> <dataset_dir> val [conf] [iou]" << std::endl;
-        std::cerr << "             (dataset_dir should contain images/test and labels/test)" << std::endl;
-        return 1;
+    float map_conf = 0.5f;
+    int warmup = 5;
+    int iters = 20;
+};
+
+static std::string getOpt(int argc, char** argv, const std::string& key, const std::string& def = "") {
+    for (int i = 1; i + 1 < argc; i++) {
+        if (key == argv[i]) return argv[i + 1];
     }
+    return def;
+}
 
-    std::string engine_path = argv[1];
-    std::string path2 = argv[2];
+static int getOptInt(int argc, char** argv, const std::string& key, int def) {
+    auto s = getOpt(argc, argv, key, "");
+    return s.empty() ? def : std::stoi(s);
+}
 
-    // Check if validation mode (3rd arg is "val" or ends with "/" indicating a directory)
-    if (argc >= 4 && std::string(argv[3]) == "val") {
-        float conf = (argc >= 5) ? std::stof(argv[4]) : 0.5f;
-        float iou = (argc >= 6) ? std::stof(argv[5]) : 0.5f;
-        
-        runValidation(engine_path, path2, conf, iou);
-        return 0;
-    }
+static float getOptFloat(int argc, char** argv, const std::string& key, float def) {
+    auto s = getOpt(argc, argv, key, "");
+    return s.empty() ? def : std::stof(s);
+}
 
-    // Original benchmark mode
-    YOLODetector yolo(engine_path);
-    cv::Mat img = cv::imread(path2);
+// ======================= Benchmark =======================
+void runBench(const Args& a) {
+    auto detector = makeDetector(a.model_path);
 
+    cv::Mat img = cv::imread(a.image_path);
     if (img.empty()) {
-        std::cerr << "[ERROR]: image empty at path: " << path2 << std::endl;
-        return 1;
+        throw std::runtime_error("[ERROR] image empty at path: " + a.image_path);
     }
 
-    std::cout << "[INFO] Starting Warm-up" << std::endl;
-    const int NUM_WARMUP = 5;
-    for (int i = 0; i < NUM_WARMUP; ++i) {
-       yolo.detect(img, 0.7f); 
+    std::cout << "[INFO] Model:  " << a.model_path << "\n";
+    std::cout << "[INFO] Image:  " << a.image_path << "\n";
+    std::cout << "[INFO] Conf:   " << a.map_conf << "\n";
+    std::cout << "[INFO] Warmup: " << a.warmup << "\n";
+    std::cout << "[INFO] Iters:  " << a.iters << "\n";
+
+    std::cout << "[INFO] Starting warm-up...\n";
+    for (int i = 0; i < a.warmup; ++i) {
+        auto preds = detector->detect(img, a.map_conf);
+        (void)preds;
     }
 
-    const int NUM_ITERATIONS = 20;
-    std::cout << "[INFO] Starting benchmarking on " << NUM_ITERATIONS << " runs" << std::endl;
+    std::cout << "[INFO] Starting benchmark...\n";
 
+    std::vector<Detection> last_preds;
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < NUM_ITERATIONS; ++i) {
-       yolo.detect(img, 0.7f); 
+    for (int i = 0; i < a.iters; ++i) {
+        last_preds = detector->detect(img, a.map_conf);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
 
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    double total_ms =
+        std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start).count();
+    double latency_ms = total_ms / static_cast<double>(a.iters);
+    double fps = (latency_ms > 0.0) ? (1000.0 / latency_ms) : 0.0;
 
-    int latency = duration / NUM_ITERATIONS;
-    int fps = 1000.0f / latency;
+    std::cout << "Detections kept: " << last_preds.size() << "\n";
+    std::cout << "Average latency: " << latency_ms << " ms\n";
+    std::cout << "Average FPS:     " << fps << "\n";
+}
 
-    std::cout << "Average latency: " << latency << " ms." << std::endl;
-    std::cout << "Average fps: " << fps << " fps." << std::endl; 
+// ======================= main =======================
+int main(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr
+            << "[USAGE]\n"
+            << "  ./inference <model_path> <image_path> "
+            << "[--map_conf 0.5] [--warmup 5] [--iters 20]\n";
+        return 1;
+    }
+
+    Args a;
+    a.model_path = argv[1];
+    a.image_path = argv[2];
+    a.map_conf = getOptFloat(argc, argv, "--map_conf", a.map_conf);
+    a.warmup = getOptInt(argc, argv, "--warmup", a.warmup);
+    a.iters = getOptInt(argc, argv, "--iters", a.iters);
+
+    try {
+        runBench(a);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
 
     return 0;
 }
