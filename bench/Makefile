@@ -73,7 +73,7 @@ run:
 validate: val_bin
 	$(VAL_CMD) | tee $(ENGINE).val.log
 
-bench_val: build
+bench_val: val_bin
 	$(BENCH_VAL_CMD) | tee $(ENGINE).bench_val.log
 
 profile: build
