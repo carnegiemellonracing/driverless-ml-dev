@@ -734,7 +734,7 @@ void runValidation(const Args& a) {
     std::cout << "Pred boxes kept: " << all_preds.size() << "\n";
 
     reportMAP50(all_preds, all_gts);
-    reportMAP95(all_preds, all_gts);
+    reportMAP5095(all_preds, all_gts);
     printConfusionMatrix(confusion);
 
     std::cout << "========================================\n";
