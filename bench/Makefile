@@ -68,7 +68,7 @@ val_bin:
 	  -pedantic-errors -Wall -Wextra
 
 run:
-	$(INFER_CMD) | tee $(ENGINE).run.log
+	$(RUN_CMD) | tee $(ENGINE).run.log
 
 validate: build
 	$(VAL_CMD) | tee $(ENGINE).val.log
