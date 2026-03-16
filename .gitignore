@@ -208,3 +208,16 @@ __marimo__/
 
 # Data mount
 ml_data/
+
+# TEMPORARY val save
+runs/
+
+# models
+*.pt
+*.onnx
+*.engine
+
+._*
+
+*.nsys-rep
+*.sqlite
