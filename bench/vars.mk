@@ -7,10 +7,8 @@ INFER_BIN := yolo-inference/build/inference
 VAL_BIN   := yolo-inference/build/validation
 
 # Validation thresholds
-VAL_CONF  := 0.5
-VAL_IOU   := 0.5
-VAL_HSV   := 0
-VAL_TAU   := 0.8
+MAP_CONF  := 0.5
+CM_IOU   := 0.5
 VAL_MAX   := -1
 
 # TensorRT build knobs (edit these)
