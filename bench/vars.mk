@@ -1,5 +1,5 @@
 # Paths
-ONNX      := ml_data/models/best26s.onnx
+ONNX      := ml_data/models/yolov5_model_params.onnx
 ENGINE    := ml_data/models/best26s.engine
 IMG       := ml_data/fsoco_yolo/images/test/amz_amz_00004.jpg
 DATASET   := ml_data/fsoco_yolo
