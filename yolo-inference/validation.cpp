@@ -804,6 +804,7 @@ struct Args {
     std::string model_path;
     std::string path;  // image_path for bench, dataset_dir for val
     bool val_mode = false;
+    bool alt_cone_map = false;
 
     float map_conf = 0.001f;
     float cm_iou = 0.50f;
@@ -828,6 +829,13 @@ static int getOptInt(int argc, char** argv, const std::string& key, int def) {
 static float getOptFloat(int argc, char** argv, const std::string& key, float def) {
     auto s = getOpt(argc, argv, key, "");
     return s.empty() ? def : std::stof(s);
+}
+
+static bool hasOpt(int argc, char** argv, const std::string& key) {
+    for (int i = 1; i < argc; i++) {
+        if (key == argv[i]) return true;
+    }
+    return false;
 }
 
 // ======================= Validation =======================
@@ -870,6 +878,16 @@ void runValidation(const Args& a) {
 
         auto gts = parseYOLOLabels640(label_path);
         auto preds = detector->detect(img, a.map_conf);
+
+        if (a.alt_cone_map) {
+            for (auto& p : preds) {
+                if (p.label == 0) p.label = 2; // BLUE -> blue_cone
+                else if (p.label == 2) p.label = 3; // ORANGE -> orange_cone
+                else if (p.label == 3) p.label = 4; // BIG_ORANGE -> large_orange_cone
+                else if (p.label == 4) p.label = 1; // YELLOW -> yellow_cone
+                else p.label = 0; // UNKNOWN -> unknown_cone
+            }
+        }
 
         for (const auto& g : gts) {
             if (g.label >= 0 && g.label < NUM_CLASSES) {
@@ -941,9 +959,9 @@ int main(int argc, char** argv) {
         std::cerr
             << "[USAGE]\n"
             << "  Bench: ./validation <model_path> <image_path> "
-            << "[--map_conf 0.001] [--warmup 5] [--iters 20]\n"
+            << "[--map_conf 0.001] [--warmup 5] [--iters 20] [--alt_cone_map]\n"
             << "  Val:   ./validation <model_path> <dataset_dir> val "
-            << "[--map_conf 0.001] [--cm_iou 0.50] [--max_images N]\n"
+            << "[--map_conf 0.001] [--cm_iou 0.50] [--max_images N] [--alt_cone_map]\n"
             << "        dataset_dir must contain images/test and labels/test\n";
         return 1;
     }
@@ -958,6 +976,7 @@ int main(int argc, char** argv) {
     a.warmup     = getOptInt(argc, argv, "--warmup", a.warmup);
     a.iters      = getOptInt(argc, argv, "--iters", a.iters);
     a.max_images = getOptInt(argc, argv, "--max_images", a.max_images);
+    a.alt_cone_map = hasOpt(argc, argv, "--alt_cone_map");
 
     try {
         if (a.val_mode) runValidation(a);
