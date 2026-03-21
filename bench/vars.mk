@@ -10,6 +10,7 @@ VAL_BIN   := yolo-inference/build/validation
 MAP_CONF  := 0.001
 CM_IOU   := 0.5
 VAL_MAX   := -1
+ALT_CONE_MAP := 0
 
 # TensorRT build knobs (edit these)
 TRT_PREC  := --fp16             # mixed precision depending on hardware support 
