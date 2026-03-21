@@ -50,6 +50,21 @@ const std::vector<std::string> CLASS_NAMES = {
     "large_orange_cone"
 };
 
+enum class AltConeColor {
+    UNKNOWN     = -1,
+    BLUE        = 0,
+    ORANGE      = 2,
+    BIG_ORANGE  = 3,
+    YELLOW      = 4
+};
+
+static const std::unordered_map<int, int> ALT_CONE_MAP = {
+    {static_cast<int>(AltConeColor::BLUE),       2},
+    {static_cast<int>(AltConeColor::ORANGE),     3},
+    {static_cast<int>(AltConeColor::BIG_ORANGE), 4},
+    {static_cast<int>(AltConeColor::YELLOW),     1}
+};
+
 static inline std::string className(int c) {
     if (c == BG_CLASS) return "background";
     if (c >= 0 && c < static_cast<int>(CLASS_NAMES.size())) return CLASS_NAMES[c];
@@ -881,11 +896,8 @@ void runValidation(const Args& a) {
 
         if (a.alt_cone_map) {
             for (auto& p : preds) {
-                if (p.label == 0) p.label = 2; // BLUE -> blue_cone
-                else if (p.label == 2) p.label = 3; // ORANGE -> orange_cone
-                else if (p.label == 3) p.label = 4; // BIG_ORANGE -> large_orange_cone
-                else if (p.label == 4) p.label = 1; // YELLOW -> yellow_cone
-                else p.label = 0; // UNKNOWN -> unknown_cone
+                auto it = ALT_CONE_MAP.find(p.label);
+                p.label = (it != ALT_CONE_MAP.end()) ? it->second : 0;
             }
         }
 

@@ -39,10 +39,12 @@ TRT_CMD := trtexec --onnx=$(ONNX) --saveEngine=$(ENGINE) $(TRT_PREC) $(TRT_WS_FL
 
 RUN_CMD := $(APP_BIN) $(MODEL) $(IMG) --map_conf $(MAP_CONF) --warmup $(WARMUP) --iters $(ITERS)
 
-VAL_CMD := $(VAL_BIN) $(MODEL) $(DATASET) val --map_conf $(MAP_CONF) --cm_iou $(CM_IOU) --max_images $(VAL_MAX)
+ALT_OPTS := $(if $(filter 1,$(ALT_CONE_MAP)),--alt_cone_map,)
+
+VAL_CMD := $(VAL_BIN) $(MODEL) $(DATASET) val --map_conf $(MAP_CONF) --cm_iou $(CM_IOU) --max_images $(VAL_MAX) $(ALT_OPTS)
 
 # validation binary, but on one image path -> bench mode
-BENCH_VAL_CMD := $(VAL_BIN) $(MODEL) $(IMG) --map_conf $(MAP_CONF) --warmup $(WARMUP) --iters $(ITERS)
+BENCH_VAL_CMD := $(VAL_BIN) $(MODEL) $(IMG) --map_conf $(MAP_CONF) --warmup $(WARMUP) --iters $(ITERS) $(ALT_OPTS)
 
 NSYS_CMD := sudo nsys profile $(NSYS_OPTS) --output=$(NSYS_OUT) $(RUN_CMD)
 
