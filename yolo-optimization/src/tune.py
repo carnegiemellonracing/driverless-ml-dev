@@ -29,8 +29,12 @@ def run_tuning(model_name, config_path, resume=False):
   train_args = config.get("train_args", {})
   search_space = build_search_space(config["search_space"])
   
-  print("Preparing dataset")
-  data_yaml = dataset.prepare()
+  # print("Preparing dataset")
+  # data_yaml = dataset.prepare()
+  print("CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
+  import torch
+  print("Torch CUDA available:", torch.cuda.is_available())
+  print("Torch CUDA device count:", torch.cuda.device_count())
   
   os.environ["MLFLOW_TRACKING_URI"] = "file:///root/driverless-ml-dev/ml_data/experiments/mlflow_tracking"
   os.environ["MLFLOW_EXPERIMENT_NAME"] = f"{train_args.get('name', 'ray_tune')}_{model_name}"
@@ -63,7 +67,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run hyperparameter tuning for YOLO models.")
 
-    parser.add_argument("--model", type=str, default="yolov8n.pt")
+    parser.add_argument("--model", type=str, default="yolo26s.pt")
     parser.add_argument("--config", type=str, default="yolo-optimization/configs/tune_config.yaml")
     parser.add_argument("--resume", action="store_true")
 

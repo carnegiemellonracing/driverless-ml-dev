@@ -50,7 +50,7 @@ def create_or_show_yaml(
         return config_path
 
     config = {
-        "path": str(yolo_dir.resolve()),
+        "path": ".",
         "train": "images/train",
         "val": "images/val",
         "test": "images/test",
@@ -64,6 +64,41 @@ def create_or_show_yaml(
 
     print(f"Config saved: {config_path}")
     print(yaml_lib.dump(config, default_flow_style=False, sort_keys=False))
+    return config_path
+
+
+def normalize_existing_yaml(yolo_dir: Path) -> Path:
+    """Normalize fsoco.yaml for cross-platform portability."""
+    config_path = yolo_dir / "fsoco.yaml"
+    if not config_path.exists():
+        return config_path
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml_lib.safe_load(f)
+
+    if not isinstance(config, dict):
+        raise RuntimeError(f"Unexpected YAML structure in {config_path}")
+
+    changed = False
+    if config.get("path") != ".":
+        config["path"] = "."
+        changed = True
+
+    defaults = {
+        "train": "images/train",
+        "val": "images/val",
+        "test": "images/test",
+    }
+    for key, value in defaults.items():
+        if key not in config:
+            config[key] = value
+            changed = True
+
+    if changed:
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml_lib.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        print(f"Normalized dataset YAML for portability: {config_path}")
+
     return config_path
 
 

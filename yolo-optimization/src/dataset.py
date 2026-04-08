@@ -42,6 +42,12 @@ def prepare():
   Prepare dataset by running preprocessing in sequence:
   fsoco-to-yolo -> editing -> convert -> yaml
   """
+  if _is_populated_dir(FSOCO_YOLO) and FSOCO_YAML.exists():
+    yaml_step = _load_module("preprocess_yaml", PREPROCESSING_DIR / "yaml.py")
+    yaml_step.normalize_existing_yaml(FSOCO_YOLO)
+    print(f"Skipping preprocessing: final dataset already exists at {FSOCO_YOLO}")
+    return FSOCO_YAML
+
   if not FSOCO_RAW.exists():
     raise FileNotFoundError(f"Raw dataset not found at {FSOCO_RAW}")
 
@@ -57,7 +63,7 @@ def prepare():
   (FSOCO_EDIT / "img").mkdir(parents=True, exist_ok=True)
   (FSOCO_EDIT / "ann").mkdir(parents=True, exist_ok=True)
   editing.split_dataset_on_x_axis(
-    aspect_ratio=1.0,
+    aspect_ratio=1.6, # aspect ratio of seecams https://www.e-consystems.com/industrial-cameras/ar0234-usb3-global-shutter-camera.asp#
     images_folder_path=FSOCO_MOD / "img",
     labels_folder_path=FSOCO_MOD / "ann",
     output_images_folder_path=FSOCO_EDIT / "img",

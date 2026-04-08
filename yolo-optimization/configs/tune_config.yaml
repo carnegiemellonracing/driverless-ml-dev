@@ -1,45 +1,46 @@
 tuning:
-  iterations: 30
+  iterations: 40
   grace_period: 20
   gpu_per_trial: 1
   epochs: 100
 
 train_args:
-  imgsz: 640
-  batch: -1
-  workers: 4
-  rect: true
-  patience: 20
+  imgsz: 640           # fixed by pipeline/inference deployment; matches real test-time resolution
+  batch: -1            # auto-max batch for GPU usage; compensates for varying free VRAM
+  workers: 12           # dataloader workers; compensates for CPU/input bottlenecks, not model behavior
+  rect: true           # keeps aspect ratio in batching; compensates for wide camera frames / less resize distortion
+  patience: 15         # early stop if no improvement; compensates for wasting time on stalled runs
   project: "ml_data/experiments"
-  name: "ray_tune"
-  device: 0
+  name: "ray_tune_26s"
+  # device: 0
+
+  hsv_h: 0.0           # keep hue fixed so cone colors stay realistic; avoids fake blue/yellow/orange shifts
+  degrees: 0.0         # no random rotation; car camera is rigidly mounted, not tilted in real driving
+  shear: 0.0           # no shear distortion; avoids unrealistic cone geometry not seen on-track
+  perspective: 0.0     # no synthetic perspective warp; real perspective already comes from distance/pose
+  flipud: 0.0          # no vertical flip; upside-down track images are not realistic
+  copy_paste: 0.0      # disable synthetic pasted objects; avoids unnatural cone placement/density
+  box: 7.5             # fixed box loss weight; balances localization without wasting trials on a lower-impact knob
+  cls: 1.0             # fixed class loss weight; keeps class learning stable while tuning more important params first
 
 # [type, arg1, arg2] -> uniform/loguniform/choice
 search_space:
-  lr0: ["loguniform", 1.0e-4, 1.0e-2]
-  lrf: ["uniform", 0.05, 0.3]
-  momentum: ["uniform", 0.85, 0.98]
-  weight_decay: ["loguniform", 1.0e-5, 1.0e-3]
-  warmup_epochs: ["uniform", 1.0, 5.0]
-  warmup_momentum: ["uniform", 0.5, 0.9]
-  
-  box: ["uniform", 5.0, 10.0]
-  cls: ["uniform", 0.5, 2.0]
-  
-  # conservative hsv - cone colors are semantic
-  hsv_h: ["uniform", 0.0, 0.02]
-  hsv_s: ["uniform", 0.0, 0.4]
-  hsv_v: ["uniform", 0.0, 0.5]
-  
-  degrees: ["uniform", 0.0, 15.0]
-  translate: ["uniform", 0.0, 0.2]
-  scale: ["uniform", 0.2, 0.8]
-  shear: ["uniform", 0.0, 5.0]
-  perspective: ["uniform", 0.0, 0.0005]
-  
-  fliplr: ["uniform", 0.0, 0.5]
-  flipud: ["choice", [0.0]]
-  
-  mosaic: ["uniform", 0.5, 1.0]
-  mixup: ["uniform", 0.0, 0.3]
-  copy_paste: ["uniform", 0.0, 0.3]
+  lr0: ["loguniform", 1.5e-4, 5.0e-3]         # initial learning rate; compensates for how aggressively training should adapt
+  lrf: ["uniform", 0.08, 0.20]                # final LR fraction; compensates for needing slower or sharper late training decay
+  cos_lr: ["choice", [true, false]]           # cosine LR schedule on/off; compensates for different convergence patterns
+  momentum: ["uniform", 0.88, 0.97]           # SGD momentum; compensates for noisy gradients / batch-to-batch instability
+  weight_decay: ["loguniform", 2.0e-4, 1.0e-3] # regularization strength; compensates for overfitting to your specific track/data
+  warmup_epochs: ["uniform", 2.0, 4.0]        # gradual training ramp-up; compensates for unstable early optimization
+  warmup_momentum: ["uniform", 0.6, 0.9]      # smoother start for momentum; compensates for early-epoch optimizer shock
+
+  hsv_s: ["uniform", 0.2, 0.7]                # saturation jitter; compensates for lighting/camera color intensity changes
+  hsv_v: ["uniform", 0.15, 0.45]              # brightness jitter; compensates for sun, shade, clouds, exposure variation
+
+  translate: ["uniform", 0.02, 0.08]          # image shift; compensates for cones appearing slightly off-center due to car motion
+  scale: ["uniform", 0.25, 0.55]              # zoom/size jitter; compensates for distance changes and imperfect framing
+
+  fliplr: ["choice", [0.0, 0.5]]              # horizontal flip on/off; compensates for left/right track symmetry if helpful
+
+  mosaic: ["uniform", 0.4, 0.75]              # multi-image augmentation; compensates for cone density/layout diversity
+  close_mosaic: ["choice", [0, 10, 20]]       # disable mosaic in final epochs; compensates for synthetic train scenes vs real test images
+  mixup: ["uniform", 0.0, 0.08]               # light image blending; compensates for generalization, kept low to avoid unrealistic scenes
