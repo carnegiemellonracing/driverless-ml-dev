@@ -19,6 +19,7 @@ LOGGER_NAME = "dataset_x_splitter"
 DEFAULT_IMAGES_DIR = Path("ml_data") / "" / "ampera" / "img"
 DEFAULT_LABELS_DIR = Path("ml_data") / "fsoco_bounding_boxes_train" / "ampera" / "ann"
 DEFAULT_ASPECT_RATIO = 1
+DEFAULT_SPLIT_CONTEXT_PIXELS = 8
 DEFAULT_MAX_TASKS_PER_CHILD = 128
 DEFAULT_IN_FLIGHT_MULTIPLIER = 4
 
@@ -418,7 +419,20 @@ def _process_single_image(
     )
     if not split_segments:
         stats.images_unsplittable += 1
-        logger.info("Skipping %s (no valid split boundary found).", image_path.name)
+        logger.info("Keeping %s without split (no valid split boundary found).", image_path.name)
+        output_image_path = output_images_dir / image_path.name
+        output_label_path = output_labels_dir / f"{output_image_path.name}.json"
+        _write_output_pair(
+            image=image,
+            boxes=boxes,
+            label_metadata=label_metadata,
+            output_image_path=output_image_path,
+            output_label_path=output_label_path,
+        )
+        stats.output_images_written += 1
+        stats.output_labels_written += 1
+        stats.total_output_boxes += len(boxes)
+        stats.images_with_outputs += 1
         return stats
 
     written_outputs = 0
@@ -723,9 +737,11 @@ def _choose_best_split_boundary(
     box_count = len(boxes)
     sorted_x_max = sorted(box.x_max for box in boxes)
     sorted_x_min = sorted(box.x_min for box in boxes)
+    sorted_box_edges = sorted(coord for box in boxes for coord in (box.x_min, box.x_max))
+    required_context = float(DEFAULT_SPLIT_CONTEXT_PIXELS)
 
     best_boundary: int | None = None
-    best_score: tuple[float, float, float, float] | None = None
+    best_score: tuple[float, float, float, float, float] | None = None
     stats.split_candidates_total += image_width - 1
 
     for boundary in range(1, image_width):
@@ -733,6 +749,10 @@ def _choose_best_split_boundary(
         right_count = box_count - bisect_left(sorted_x_min, boundary)
         if left_count + right_count != box_count:
             stats.split_candidates_cut_box += 1
+            continue
+
+        boundary_context = _nearest_edge_distance(sorted_edges=sorted_box_edges, boundary=boundary)
+        if boundary_context < required_context:
             continue
 
         stats.split_candidates_valid += 1
@@ -748,12 +768,32 @@ def _choose_best_split_boundary(
             float(empty_side_count),
             left_error + right_error,
             max(left_error, right_error),
+            -boundary_context,
             abs(boundary - (image_width - boundary)),
         )
         if best_score is None or score < best_score:
             best_score = score
             best_boundary = boundary
+
     return best_boundary
+
+
+def _nearest_edge_distance(sorted_edges: list[float], boundary: int) -> float:
+    if not sorted_edges:
+        return float("inf")
+
+    insert_idx = bisect_left(sorted_edges, boundary)
+    left_distance = (
+        float(boundary) - float(sorted_edges[insert_idx - 1])
+        if insert_idx > 0
+        else float("inf")
+    )
+    right_distance = (
+        float(sorted_edges[insert_idx]) - float(boundary)
+        if insert_idx < len(sorted_edges)
+        else float("inf")
+    )
+    return min(left_distance, right_distance)
 
 
 def _count_boxes_for_boundary(boxes: list[Box], boundary: int) -> tuple[int, int, bool]:

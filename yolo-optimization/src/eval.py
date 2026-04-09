@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 import dataset
 
-def run_eval(weights_path, params_path):
+def run_eval(weights_path, params_path, cleanup_intermediate_copies=False):
   """
   Evaluation using unseen test set on trained model
   """
@@ -21,7 +21,9 @@ def run_eval(weights_path, params_path):
     return None
 
   print("Preparing Dataset")
-  data_yaml = dataset.prepare()
+  data_yaml = dataset.prepare(
+    cleanup_intermediate_copies=cleanup_intermediate_copies
+  )
   
   print("Constructing output path")
   project = params.get("project")
@@ -110,7 +112,16 @@ if __name__ == "__main__":
   
   parser.add_argument("--weights", type=str, required=True, help="(e.g., experiments/run/weights/best.pt)")
   parser.add_argument("--params", type=str, default="yolo-optimization/configs/hyperparams.yaml")
+  parser.add_argument(
+    "--cleanup-intermediate-copies",
+    action="store_true",
+    help="Delete preprocessing intermediate folders (ml_data/fsoco_mod and ml_data/fsoco_edit) after prepare().",
+  )
 
   args = parser.parse_args()
   
-  run_eval(args.weights, args.params)
+  run_eval(
+    args.weights,
+    args.params,
+    cleanup_intermediate_copies=args.cleanup_intermediate_copies,
+  )
