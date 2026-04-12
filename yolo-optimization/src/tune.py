@@ -5,8 +5,16 @@ from ultralytics import YOLO
 from ultralytics import settings
 import mlflow
 import os
+from pathlib import Path
 
 import dataset
+
+BEST_METRIC_KEYS = (
+  "metrics/mAP50-95(B)",
+  "metrics/mAP50-95(M)",
+  "metrics/mAP50-95(P)",
+)
+
 
 def build_search_space(space_config):
   search_space = {}
@@ -20,6 +28,36 @@ def build_search_space(space_config):
       search_space[param] = tune.choice(spec[1])
   return search_space
 
+
+def log_best_trial_summary(result):
+  if result is None:
+    return
+
+  best_result = None
+  best_metric_key = None
+  for metric_key in BEST_METRIC_KEYS:
+    try:
+      best_result = result.get_best_result(metric=metric_key, mode="max")
+      best_metric_key = metric_key
+      break
+    except Exception:
+      continue
+
+  if best_result is None:
+    print("Could not determine best Ray Tune trial from known mAP metrics.")
+    return
+
+  metrics = getattr(best_result, "metrics", {}) or {}
+  trial_path = getattr(best_result, "path", None) or getattr(best_result, "log_dir", "")
+  trial_dir = Path(trial_path)
+  best_weights = trial_dir / "weights" / "best.pt"
+
+  print("\n=== Best Trial Summary ===")
+  print(f"{best_metric_key}: {metrics.get(best_metric_key)}")
+  print(f"Trial directory: {trial_dir}")
+  print(f"Best weights: {best_weights}")
+
+
 def run_tuning(model_name, config_path, resume=False):
   print(f"Loading config from {config_path}")
   with open(config_path, 'r') as f:
@@ -29,8 +67,8 @@ def run_tuning(model_name, config_path, resume=False):
   train_args = config.get("train_args", {})
   search_space = build_search_space(config["search_space"])
   
-  # print("Preparing dataset")
-  # data_yaml = dataset.prepare()
+  print("Preparing dataset")
+  data_yaml = dataset.prepare()
   print("CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
   import torch
   print("Torch CUDA available:", torch.cuda.is_available())
@@ -53,13 +91,15 @@ def run_tuning(model_name, config_path, resume=False):
     "iterations": tuning_cfg["iterations"],
     "gpu_per_trial": tuning_cfg.get("gpu_per_trial", 1),
     "grace_period": tuning_cfg["grace_period"],
-    "use_ray": True,
+    "use_ray": tuning_cfg.get("use_ray", True),
     "resume": resume,
     **train_args
   }
   
   print(f"Starting tuning: {tuning_cfg['iterations']} trials, {tuning_cfg['epochs']} epochs each")
   result = model.tune(**tune_kwargs)
+  if tune_kwargs.get("use_ray", True):
+    log_best_trial_summary(result)
   
   return result
 
