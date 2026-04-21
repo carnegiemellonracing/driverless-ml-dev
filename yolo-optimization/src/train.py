@@ -49,7 +49,7 @@ def run_training(model_name, params_path, cleanup_intermediate_copies=False):
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="YOLO Training Pipeline")
   
-  parser.add_argument("--model", type=str, default="yolov8n.pt")
+  parser.add_argument("--model", type=str, default="yolo26s.pt")
   parser.add_argument("--params", type=str, default="yolo-optimization/configs/hyperparams.yaml")
   parser.add_argument(
     "--cleanup-intermediate-copies",

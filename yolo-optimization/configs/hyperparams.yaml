@@ -4,11 +4,11 @@ imgsz: 640
 device: 0
 patience: 50
 
-workers: 8
+workers: 4
 rect: true
 
 project: "ml_data/experiments"
-name: "yolov8n"
+name: "ray_tune_26s_real"
 optimizer: "auto"
 val: true                # val during training
 save: true               # save checkpoints

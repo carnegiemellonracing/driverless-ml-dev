@@ -11,7 +11,7 @@ train_args:
   rect: true           # keeps aspect ratio in batching; compensates for wide camera frames / less resize distortion
   patience: 15         # early stop if no improvement; compensates for wasting time on stalled runs
   project: "ml_data/experiments"
-  name: "ray_tune_26s"
+  name: "ray_tune_26s_real"
   # device: 0
 
   hsv_h: 0.0           # keep hue fixed so cone colors stay realistic; avoids fake blue/yellow/orange shifts
