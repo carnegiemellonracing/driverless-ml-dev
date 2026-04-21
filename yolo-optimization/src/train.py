@@ -9,6 +9,9 @@ from ultralytics import settings
 
 import dataset
 
+ROOT = Path(__file__).resolve().parents[2]
+MLFLOW_TRACKING_DIR = ROOT / "ml_data" / "experiments" / "mlflow_tracking"
+
 def run_training(model_name, params_path, cleanup_intermediate_copies=False):
   """
   Data Prep + Experiment Setup + Training
@@ -26,7 +29,8 @@ def run_training(model_name, params_path, cleanup_intermediate_copies=False):
     params = yaml.safe_load(f)
     
   # Set up experiment tracking to mounted directory, set tensorboard to false explicitly
-  os.environ["MLFLOW_TRACKING_URI"] = "file:///root/driverless-ml-dev/ml_data/experiments/mlflow_tracking"
+  MLFLOW_TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+  os.environ["MLFLOW_TRACKING_URI"] = MLFLOW_TRACKING_DIR.resolve().as_uri()
   os.environ["MLFLOW_EXPERIMENT_NAME"] = params.get("name")
   settings.update({
     "tensorboard": False,
