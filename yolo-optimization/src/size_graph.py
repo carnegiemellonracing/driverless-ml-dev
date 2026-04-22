@@ -3,12 +3,13 @@ from ultralytics import YOLO
 import numpy as np
 import matplotlib.pyplot as plt
 
-source_dir = "ml_data/fsoco_yolo/images/test"
+source_dir = "ml_data/fsoco_yolo/images/val"
+model_dir = "runs/detect/ml_data/experiments/ray_tune_26s_real/weights/best.pt"
 #progress calc
 image_files = [f for f in os.listdir(source_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
 total_images = len(image_files)
 
-model = YOLO("ml_data/model_saves/models/26s_tuned_best.pt")
+model = YOLO(model_dir)
 
 areas = np.array([])
 confs = np.array([])
@@ -80,7 +81,7 @@ plt.ylim(0, 1.05)
 plt.grid(True, which="both", linestyle='--', alpha=0.5)
 plt.legend()
 
-plt.savefig(os.path.join("ml_data/model_saves", "test_area_vs_conf_26s.png"))
+plt.savefig(os.path.join(model_dir, "test_area_vs_conf_26s.png"))
 print(f"\nGraph updated: area_vs_conf.png")
 if recommended_cutoff > 0:
     print(f"RECOMMENDED CUTOFF: {recommended_cutoff:.0f} pixels")

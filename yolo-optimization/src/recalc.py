@@ -225,8 +225,8 @@ def save_plots(rows, prefix):
 def main():
     parser = argparse.ArgumentParser(description="Recalculate mAP with area cutoff sweep")
     parser.add_argument("--model",           type=str,   default="ml_data/26s_tuned_best.pt")
-    parser.add_argument("--source",          type=str,   default="ml_data/fsoco_yolo/images/")
-    parser.add_argument("--labels",          type=str,   default="ml_data/fsoco_yolo/labels/")
+    parser.add_argument("--source",          type=str,   default="ml_data/fsoco_yolo/images/val")
+    parser.add_argument("--labels",          type=str,   default="ml_data/fsoco_yolo/labels/val")
     parser.add_argument("--conf-thresh",     type=float, default=0.001)
     parser.add_argument("--exclude-classes", type=int,   nargs="*", default=[])
     # edit the default list below to change which cutoffs are swept
