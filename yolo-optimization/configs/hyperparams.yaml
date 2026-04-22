@@ -4,8 +4,9 @@ imgsz: 640
 device: 0
 patience: 50
 
-workers: 4
+workers: 8
 rect: true
+device: 0
 
 project: "ml_data/experiments"
 name: "ray_tune_26s_real"
