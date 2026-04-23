@@ -8,8 +8,7 @@ workers: 8
 rect: true
 device: 0
 
-project: "ml_data/experiments"
-name: "ray_tune_26s_real"
+name: "26s_rect"
 optimizer: "auto"
 val: true                # val during training
 save: true               # save checkpoints
